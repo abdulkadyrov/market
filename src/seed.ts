@@ -11,6 +11,9 @@ import type {
 } from "./types";
 import { nowIso } from "./utils";
 
+const initializedKey = "market-db-initialized";
+const demoRequestedKey = "market-db-demo-requested";
+
 const timestamp = nowIso();
 
 const stockGroupId = "group_bolgarka";
@@ -284,10 +287,37 @@ const appSettings: AppSettings[] = [
   }
 ];
 
+const setInitialized = () => {
+  window.localStorage.setItem(initializedKey, "1");
+};
+
+const clearDemoRequest = () => {
+  window.localStorage.removeItem(demoRequestedKey);
+};
+
+const isInitialized = () => window.localStorage.getItem(initializedKey) === "1";
+const isDemoRequested = () => window.localStorage.getItem(demoRequestedKey) === "1";
+
+export const requestDemoSeed = () => {
+  window.localStorage.setItem(demoRequestedKey, "1");
+  window.localStorage.removeItem(initializedKey);
+};
+
+export const markDatabaseInitialized = () => {
+  setInitialized();
+  clearDemoRequest();
+};
+
 export const seedDatabase = async () => {
   const existing = await db.products.count();
 
   if (existing > 0) {
+    setInitialized();
+    clearDemoRequest();
+    return;
+  }
+
+  if (isInitialized() && !isDemoRequested()) {
     return;
   }
 
@@ -299,4 +329,6 @@ export const seedDatabase = async () => {
   await db.writeOffs.bulkAdd(writeOffs);
   await db.quickButtonSettings.bulkAdd(quickButtons);
   await db.appSettings.bulkAdd(appSettings);
+  setInitialized();
+  clearDemoRequest();
 };

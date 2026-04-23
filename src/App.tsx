@@ -34,7 +34,7 @@ import {
   setReceivedAmount,
   type SaleEditor
 } from "./logic";
-import { seedDatabase } from "./seed";
+import { markDatabaseInitialized, requestDemoSeed, seedDatabase } from "./seed";
 import { exportSnapshot, importSnapshot } from "./services/exportImport";
 import "./styles.css";
 import type {
@@ -968,6 +968,7 @@ function App() {
     const text = await file.text();
     const snapshot = JSON.parse(text);
     await importSnapshot(snapshot);
+    markDatabaseInitialized();
     event.target.value = "";
     setProductDraft(null);
     setGroupDraft(null);
@@ -1079,9 +1080,29 @@ function App() {
     showToast("Расходы очищены");
   };
 
-  const resetToDemo = async () => {
+  const loadDemoData = async () => {
+    requestDemoSeed();
     await db.delete();
     window.location.reload();
+  };
+
+  const clearAllData = async () => {
+    markDatabaseInitialized();
+    await db.stockGroups.clear();
+    await db.products.clear();
+    await db.receipts.clear();
+    await db.sales.clear();
+    await db.expenses.clear();
+    await db.writeOffs.clear();
+    await db.quickButtonSettings.clear();
+    await db.appSettings.clear();
+    resetEntireCheckout(undefined);
+    setProductDraft(null);
+    setGroupDraft(null);
+    setReceiptDraft(null);
+    setWriteOffDraft(null);
+    setExpenseDraft(null);
+    showToast("Все данные очищены");
   };
 
   const saveSettings = async (patch: Partial<AppSettings>) => {
@@ -1751,16 +1772,16 @@ function App() {
                   <button
                     className="ghost-button danger"
                     type="button"
-                    onClick={() =>
-                      setConfirm({
-                        title: "Сбросить данные?",
-                        text: "Приложение перезагрузится и вернет демо-данные.",
-                        action: () => resetToDemo()
-                      })
-                    }
-                  >
-                    <RotateCcw size={18} /> Demo reset
-                  </button>
+                      onClick={() =>
+                        setConfirm({
+                          title: "Загрузить demo-данные?",
+                          text: "Текущие локальные данные будут удалены, затем приложение загрузится заново с demo-данными.",
+                          action: () => loadDemoData()
+                        })
+                      }
+                    >
+                      <RotateCcw size={18} /> Загрузить demo
+                    </button>
                 </div>
                 <div className="note-card">
                   <strong>Офлайн-режим</strong>
@@ -1864,9 +1885,9 @@ function App() {
                   }
                 />
                 <ListCard
-                  title="Полный сброс базы"
-                  subtitle="Вернуть демо-данные"
-                  meta="Удалит все локальные данные на устройстве"
+                  title="Очистить все данные"
+                  subtitle="Оставить приложение пустым"
+                  meta="Удалит все локальные данные на устройстве без возврата demo-данных"
                   side="Очень опасно"
                   actions={
                     <button
@@ -1874,13 +1895,34 @@ function App() {
                       type="button"
                       onClick={() =>
                         setConfirm({
-                          title: "Полностью сбросить базу?",
-                          text: "Все локальные данные будут удалены, затем приложение загрузится заново с demo-данными.",
-                          action: () => resetToDemo()
+                          title: "Очистить вообще все данные?",
+                          text: "Все локальные данные будут удалены. Приложение останется пустым.",
+                          action: () => clearAllData()
                         })
                       }
                     >
-                      <RotateCcw size={16} /> Сбросить базу
+                      <Trash2 size={16} /> Очистить все
+                    </button>
+                  }
+                />
+                <ListCard
+                  title="Загрузить demo-данные"
+                  subtitle="Вернуть тестовые товары и операции"
+                  meta="Полностью перезапишет текущую локальную базу"
+                  side="Опасно"
+                  actions={
+                    <button
+                      className="ghost-button danger"
+                      type="button"
+                      onClick={() =>
+                        setConfirm({
+                          title: "Загрузить demo-данные?",
+                          text: "Текущая локальная база будет удалена и заменена тестовыми данными.",
+                          action: () => loadDemoData()
+                        })
+                      }
+                    >
+                      <RotateCcw size={16} /> Demo
                     </button>
                   }
                 />
