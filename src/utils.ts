@@ -21,6 +21,25 @@ export const parseNumber = (value: string) => {
   return Number.isFinite(parsed) ? parsed : 0;
 };
 
+export const evaluateExpression = (value: string) => {
+  const normalized = value.replace(/,/g, ".").replace(/×/g, "*").replace(/÷/g, "/").replace(/\s+/g, "");
+
+  if (!normalized) {
+    return 0;
+  }
+
+  if (!/^[0-9+\-*/.()]+$/.test(normalized)) {
+    return Number.NaN;
+  }
+
+  try {
+    const result = Function(`"use strict"; return (${normalized});`)();
+    return typeof result === "number" && Number.isFinite(result) ? result : Number.NaN;
+  } catch {
+    return Number.NaN;
+  }
+};
+
 export const formatMoney = (value: number) =>
   new Intl.NumberFormat("ru-RU", {
     minimumFractionDigits: value % 1 === 0 ? 0 : 2,

@@ -49,6 +49,7 @@ export interface Receipt {
 
 export interface Sale {
   id: string;
+  saleBatchId?: string;
   productId: string;
   stockGroupId?: string;
   date: string;

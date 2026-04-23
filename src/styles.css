@@ -300,6 +300,10 @@ h2 {
   gap: 10px;
 }
 
+.metric-card.clickable {
+  cursor: pointer;
+}
+
 .metric-card strong {
   font-size: 26px;
   line-height: 1.1;
@@ -356,6 +360,10 @@ h2 {
 .ghost-button.danger {
   background: var(--danger);
   color: #fff;
+}
+
+.checkout-add-button {
+  grid-column: span 1;
 }
 
 .quick-button-row,
@@ -424,6 +432,11 @@ h2 {
   color: #fff;
 }
 
+.pad-key.operator {
+  background: #e2f0e6;
+  color: var(--primary-strong);
+}
+
 .floating-pad-backdrop {
   position: fixed;
   inset: 0;
@@ -466,6 +479,10 @@ h2 {
 .pad-live-row.total {
   padding-top: 8px;
   border-top: 1px solid rgba(111, 96, 79, 0.25);
+}
+
+.pad-live-row strong {
+  text-align: right;
 }
 
 .pad-key:disabled {

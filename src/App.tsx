@@ -53,6 +53,7 @@ import type {
 } from "./types";
 import {
   downloadTextFile,
+  evaluateExpression,
   formatDateTime,
   formatMoney,
   formatWeight,
@@ -100,6 +101,24 @@ interface KeypadState {
   suffix: string;
   value: string;
   submitLabel: string;
+}
+
+interface CartLine {
+  id: string;
+  productId: string;
+  productName: string;
+  stockGroupId?: string;
+  quantity: number;
+  salePrice: number;
+  totalAmount: number;
+  originalTotalAmount: number;
+  discountType?: DiscountType;
+  discountValue?: number;
+  discountAmount?: number;
+  finalTotalAmount: number;
+  mode: SaleMode;
+  activeBaseField: BaseField;
+  averageCost: number;
 }
 
 interface ProductDraft extends Product {}
@@ -203,8 +222,10 @@ function App() {
   const [screen, setScreen] = useState<Screen>("sale");
   const [selectedProductId, setSelectedProductId] = useState("");
   const [saleEditor, setSaleEditor] = useState<SaleEditor>(createEmptySaleEditor());
+  const [saleCart, setSaleCart] = useState<CartLine[]>([]);
+  const [receivedAmount, setReceivedAmountState] = useState<number>(0);
   const [keypad, setKeypad] = useState<KeypadState | null>(null);
-  const [toolPanel, setToolPanel] = useState<"discount" | "round" | "change" | null>(null);
+  const [toolPanel, setToolPanel] = useState<"discount" | "change" | null>(null);
   const [toast, setToast] = useState<ToastState | null>(null);
   const [confirm, setConfirm] = useState<ConfirmState | null>(null);
   const [productDraft, setProductDraft] = useState<ProductDraft | null>(null);
@@ -225,6 +246,7 @@ function App() {
   const appSettings = useLiveQuery(() => db.appSettings.get("main"), [], defaultSettings);
 
   const settings = appSettings ?? defaultSettings;
+  const saleQuickButtons = useMemo(() => quickButtons.filter((button) => button.type !== "round"), [quickButtons]);
 
   useEffect(() => {
     void (async () => {
@@ -363,12 +385,54 @@ function App() {
     };
   }, [expenses, products, receipts, sales, stockGroups, writeOffs]);
 
+  const reservedStockByProduct = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const line of saleCart) {
+      map.set(line.productId, (map.get(line.productId) ?? 0) + line.quantity);
+    }
+    return map;
+  }, [saleCart]);
+
+  const reservedStockByGroup = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const line of saleCart) {
+      if (!line.stockGroupId) {
+        continue;
+      }
+      map.set(line.stockGroupId, (map.get(line.stockGroupId) ?? 0) + line.quantity);
+    }
+    return map;
+  }, [saleCart]);
+
+  const currentLineValid =
+    !!selectedProduct && saleEditor.quantity > 0 && saleEditor.salePrice > 0 && saleEditor.finalTotalAmount > 0;
+
+  const currentLineStockLeft = selectedProduct
+    ? selectedProduct.availableStock -
+      (selectedProduct.stockGroupId
+        ? reservedStockByGroup.get(selectedProduct.stockGroupId) ?? 0
+        : reservedStockByProduct.get(selectedProduct.id) ?? 0)
+    : 0;
+
+  const checkoutCurrentIncluded = currentLineValid ? saleEditor.finalTotalAmount : 0;
+  const checkoutTotal = useMemo(
+    () => toMoney(saleCart.reduce((sum, item) => sum + item.finalTotalAmount, checkoutCurrentIncluded)),
+    [checkoutCurrentIncluded, saleCart]
+  );
+  const checkoutChange = toMoney(Math.max(0, (receivedAmount || 0) - checkoutTotal));
+
   const showToast = (text: string) => setToast({ id: makeId("toast"), text });
 
   const resetSale = (product = selectedProduct) => {
     setSaleEditor(createEmptySaleEditor(product));
     setKeypad(null);
     setToolPanel(null);
+  };
+
+  const resetEntireCheckout = (product = selectedProduct) => {
+    resetSale(product);
+    setSaleCart([]);
+    setReceivedAmountState(0);
   };
 
   const chooseProduct = (productId: string) => {
@@ -395,7 +459,8 @@ function App() {
       return saleEditor;
     }
 
-    const value = parseNumber(keypad.value);
+    const computed = evaluateExpression(keypad.value);
+    const value = Number.isFinite(computed) ? computed : 0;
     const precision = settings.weightPrecision;
 
     if (keypad.field === "quantity") {
@@ -416,9 +481,6 @@ function App() {
     if (keypad.field === "receivedAmount") {
       return setReceivedAmount(saleEditor, value, precision);
     }
-    if (keypad.field === "roundAmount") {
-      return roundSaleTotal(saleEditor, value, precision);
-    }
 
     return saleEditor;
   }, [keypad, saleEditor, settings.weightPrecision]);
@@ -428,7 +490,8 @@ function App() {
       return;
     }
 
-    const value = parseNumber(keypad.value);
+    const computed = evaluateExpression(keypad.value);
+    const value = Number.isFinite(computed) ? computed : 0;
     const precision = settings.weightPrecision;
 
     if (keypad.field === "quantity") {
@@ -457,13 +520,8 @@ function App() {
     }
 
     if (keypad.field === "receivedAmount") {
-      setSaleEditor((current) => setReceivedAmount(current, value, precision));
+      setReceivedAmountState(value);
       setToolPanel("change");
-    }
-
-    if (keypad.field === "roundAmount") {
-      setSaleEditor((current) => roundSaleTotal(current, value, precision));
-      setToolPanel(null);
     }
 
     setKeypad(null);
@@ -474,9 +532,23 @@ function App() {
       if (!current) {
         return current;
       }
-      if (key === "." && current.value.includes(".")) {
+
+      const operators = ["+", "-", "*", "/"];
+      const lastChar = current.value.slice(-1);
+
+      if (key === "." && /(^|[+\-*/(])[^+\-*/()]*\./.test(current.value)) {
         return current;
       }
+
+      if (operators.includes(key)) {
+        if (!current.value && key !== "-") {
+          return current;
+        }
+        if (operators.includes(lastChar)) {
+          return { ...current, value: `${current.value.slice(0, -1)}${key}` };
+        }
+      }
+
       return { ...current, value: `${current.value}${key}` };
     });
   };
@@ -502,12 +574,9 @@ function App() {
       setSaleEditor((current) => applyDiscount(current, "amount", button.value, precision));
       setToolPanel("discount");
     }
-    if (button.type === "round") {
-      setSaleEditor((current) => roundSaleTotal(current, button.value, precision));
-    }
   };
 
-  const persistSale = async () => {
+  const addCurrentItemToCart = () => {
     if (!selectedProduct) {
       showToast("Выберите товар");
       return;
@@ -516,61 +585,161 @@ function App() {
       showToast("Проверьте вес, цену и сумму");
       return;
     }
-    if (selectedProduct.availableStock < saleEditor.quantity) {
+    if (currentLineStockLeft < saleEditor.quantity) {
       showToast("Недостаточно остатка");
       return;
     }
 
-    const sale: Sale = {
-      id: makeId("sale"),
-      productId: selectedProduct.id,
-      stockGroupId: selectedProduct.stockGroupId,
-      date: nowIso(),
-      quantity: saleEditor.quantity,
-      salePrice: saleEditor.salePrice,
-      totalAmount: saleEditor.totalAmount,
-      originalTotalAmount: saleEditor.discountAmount ? saleEditor.originalTotalAmount : saleEditor.totalAmount,
-      discountType: saleEditor.discountType,
-      discountValue: saleEditor.discountValue,
-      discountAmount: saleEditor.discountAmount,
-      finalTotalAmount: saleEditor.finalTotalAmount,
-      receivedAmount: saleEditor.receivedAmount,
-      changeAmount: saleEditor.changeAmount,
-      mode: saleEditor.mode,
-      activeBaseField: saleEditor.activeBaseField,
-      costOfGoodsSold: toMoney(saleEditor.quantity * selectedProduct.averageCost),
-      comment: "",
-      createdAt: nowIso(),
-      updatedAt: nowIso()
-    };
+    setSaleCart((current) => [
+      ...current,
+      {
+        id: makeId("line"),
+        productId: selectedProduct.id,
+        productName: selectedProduct.displayName,
+        stockGroupId: selectedProduct.stockGroupId,
+        quantity: saleEditor.quantity,
+        salePrice: saleEditor.salePrice,
+        totalAmount: saleEditor.totalAmount,
+        originalTotalAmount: saleEditor.discountAmount ? saleEditor.originalTotalAmount : saleEditor.totalAmount,
+        discountType: saleEditor.discountType,
+        discountValue: saleEditor.discountValue,
+        discountAmount: saleEditor.discountAmount,
+        finalTotalAmount: saleEditor.finalTotalAmount,
+        mode: saleEditor.mode,
+        activeBaseField: saleEditor.activeBaseField,
+        averageCost: selectedProduct.averageCost
+      }
+    ]);
+
+    resetSale(selectedProduct);
+    showToast("Позиция добавлена в чек");
+  };
+
+  const removeCartLine = (lineId: string) => {
+    setSaleCart((current) => current.filter((item) => item.id !== lineId));
+  };
+
+  const persistSale = async () => {
+    const lines = [...saleCart];
+
+    if (currentLineValid && selectedProduct) {
+      if (currentLineStockLeft < saleEditor.quantity) {
+        showToast("Недостаточно остатка");
+        return;
+      }
+
+      lines.push({
+        id: makeId("line"),
+        productId: selectedProduct.id,
+        productName: selectedProduct.displayName,
+        stockGroupId: selectedProduct.stockGroupId,
+        quantity: saleEditor.quantity,
+        salePrice: saleEditor.salePrice,
+        totalAmount: saleEditor.totalAmount,
+        originalTotalAmount: saleEditor.discountAmount ? saleEditor.originalTotalAmount : saleEditor.totalAmount,
+        discountType: saleEditor.discountType,
+        discountValue: saleEditor.discountValue,
+        discountAmount: saleEditor.discountAmount,
+        finalTotalAmount: saleEditor.finalTotalAmount,
+        mode: saleEditor.mode,
+        activeBaseField: saleEditor.activeBaseField,
+        averageCost: selectedProduct.averageCost
+      });
+    }
+
+    if (lines.length === 0) {
+      showToast("Добавьте хотя бы одну позицию");
+      return;
+    }
+
+    const groupedStockUsage = new Map<string, number>();
+    const groupedProductUsage = new Map<string, number>();
+    for (const line of lines) {
+      if (line.stockGroupId) {
+        groupedStockUsage.set(line.stockGroupId, (groupedStockUsage.get(line.stockGroupId) ?? 0) + line.quantity);
+      } else {
+        groupedProductUsage.set(line.productId, (groupedProductUsage.get(line.productId) ?? 0) + line.quantity);
+      }
+    }
+
+    for (const [groupId, quantity] of groupedStockUsage) {
+      const product = productViews.find((item) => item.stockGroupId === groupId);
+      if (product && product.availableStock < quantity) {
+        showToast("Недостаточно остатка в общей группе");
+        return;
+      }
+    }
+
+    for (const [productId, quantity] of groupedProductUsage) {
+      const product = productViewMap.get(productId);
+      if (product && product.availableStock < quantity) {
+        showToast(`Недостаточно остатка: ${product.displayName}`);
+        return;
+      }
+    }
+
+    const batchId = makeId("batch");
+    const timestamp = nowIso();
+    const totalLinesAmount = lines.reduce((sum, line) => sum + line.finalTotalAmount, 0);
 
     await db.transaction("rw", db.sales, db.products, db.stockGroups, async () => {
-      await db.sales.add(sale);
-      if (selectedProduct.stockGroupId) {
-        const group = await db.stockGroups.get(selectedProduct.stockGroupId);
+      for (const [groupId, quantity] of groupedStockUsage) {
+        const group = await db.stockGroups.get(groupId);
         if (!group) {
           throw new Error("Группа остатка не найдена");
         }
         await db.stockGroups.put({
           ...group,
-          currentStock: toMoney(group.currentStock - saleEditor.quantity),
-          updatedAt: nowIso()
+          currentStock: toMoney(group.currentStock - quantity),
+          updatedAt: timestamp
         });
-      } else {
-        const product = await db.products.get(selectedProduct.id);
+      }
+
+      for (const [productId, quantity] of groupedProductUsage) {
+        const product = await db.products.get(productId);
         if (!product) {
           throw new Error("Товар не найден");
         }
         await db.products.put({
           ...product,
-          currentStock: toMoney(product.currentStock - saleEditor.quantity),
-          updatedAt: nowIso()
+          currentStock: toMoney(product.currentStock - quantity),
+          updatedAt: timestamp
+        });
+      }
+
+      for (const line of lines) {
+        const receivedForLine = totalLinesAmount > 0 ? toMoney((receivedAmount * line.finalTotalAmount) / totalLinesAmount) : undefined;
+        const changeForLine =
+          receivedForLine !== undefined ? toMoney(Math.max(0, receivedForLine - line.finalTotalAmount)) : undefined;
+
+        await db.sales.add({
+          id: makeId("sale"),
+          saleBatchId: batchId,
+          productId: line.productId,
+          stockGroupId: line.stockGroupId,
+          date: timestamp,
+          quantity: line.quantity,
+          salePrice: line.salePrice,
+          totalAmount: line.totalAmount,
+          originalTotalAmount: line.originalTotalAmount,
+          discountType: line.discountType,
+          discountValue: line.discountValue,
+          discountAmount: line.discountAmount,
+          finalTotalAmount: line.finalTotalAmount,
+          receivedAmount: receivedForLine,
+          changeAmount: changeForLine,
+          mode: line.mode,
+          activeBaseField: line.activeBaseField,
+          costOfGoodsSold: toMoney(line.quantity * line.averageCost),
+          comment: lines.length > 1 ? `Чек ${batchId}` : "",
+          createdAt: timestamp,
+          updatedAt: timestamp
         });
       }
     });
 
     showToast("Продано");
-    resetSale(selectedProduct);
+    resetEntireCheckout(selectedProduct);
   };
 
   const saveProduct = async () => {
@@ -915,19 +1084,16 @@ function App() {
                 <MetricCard
                   label="Цена"
                   value={`${formatMoney(saleEditor.salePrice)} ₽/кг`}
-                  buttonLabel="Изменить"
                   onClick={() => openKeypad("salePrice", "Изменить цену", saleEditor.salePrice, "₽")}
                 />
                 <MetricCard
                   label="Вес"
                   value={`${formatWeight(saleEditor.quantity, settings.weightPrecision)} кг`}
-                  buttonLabel="Изменить"
                   onClick={() => openKeypad("quantity", "Изменить вес", saleEditor.quantity, "кг")}
                 />
                 <MetricCard
                   label="Сумма"
                   value={`${formatMoney(saleEditor.totalAmount)} ₽`}
-                  buttonLabel="Изменить"
                   onClick={() => openKeypad("totalAmount", "Изменить сумму", saleEditor.totalAmount, "₽")}
                 />
                 {saleEditor.discountAmount ? (
@@ -942,39 +1108,25 @@ function App() {
               </div>
 
               <div className="quick-actions">
-                <ActionButton onClick={() => openKeypad("quantity", "Изменить вес", saleEditor.quantity, "кг")}>Изменить вес</ActionButton>
-                <ActionButton onClick={() => openKeypad("totalAmount", "Изменить сумму", saleEditor.totalAmount, "₽")}>Изменить сумму</ActionButton>
-                <ActionButton onClick={() => openKeypad("salePrice", "Изменить цену", saleEditor.salePrice, "₽")}>Изменить цену</ActionButton>
                 <ActionButton onClick={() => setToolPanel((current) => (current === "discount" ? null : "discount"))}>Скидка</ActionButton>
-                <ActionButton onClick={() => setToolPanel((current) => (current === "round" ? null : "round"))}>Округлить</ActionButton>
                 <ActionButton onClick={() => setToolPanel((current) => (current === "change" ? null : "change"))}>Расчет</ActionButton>
-                <ActionButton
-                  onClick={() => {
-                    if (!selectedProduct) {
-                      return;
-                    }
-                    resetSale(selectedProduct);
-                  }}
-                >
-                  Очистить
-                </ActionButton>
+                <button className="primary-button checkout-add-button" type="button" onClick={addCurrentItemToCart}>
+                  В чек
+                </button>
                 <button
                   className="danger-button reset-sale-button"
                   type="button"
                   onClick={() => {
-                    if (!selectedProduct) {
-                      return;
-                    }
-                    resetSale(selectedProduct);
+                    resetEntireCheckout(selectedProduct);
                   }}
                 >
                   Сбросить все
                 </button>
               </div>
 
-              {quickButtons.length > 0 && (
+              {saleQuickButtons.length > 0 && (
                 <div className="quick-button-row">
-                  {quickButtons.map((button) => (
+                  {saleQuickButtons.map((button) => (
                     <button key={button.id} className="quick-pill" type="button" onClick={() => quickApply(button)}>
                       {button.label}
                     </button>
@@ -1015,50 +1167,55 @@ function App() {
                 </Panel>
               )}
 
-              {toolPanel === "round" && (
-                <Panel title="Округление">
-                  <div className="quick-button-row">
-                    <button className="quick-pill" type="button" onClick={() => setSaleEditor((current) => roundSaleTotal(current, Math.ceil(current.totalAmount), settings.weightPrecision))}>
-                      До целого
-                    </button>
-                    <button className="quick-pill" type="button" onClick={() => setSaleEditor((current) => roundSaleTotal(current, Math.ceil(current.totalAmount / 50) * 50, settings.weightPrecision))}>
-                      До 50
-                    </button>
-                    <button className="quick-pill" type="button" onClick={() => setSaleEditor((current) => roundSaleTotal(current, Math.ceil(current.totalAmount / 100) * 100, settings.weightPrecision))}>
-                      До 100
-                    </button>
-                    <button className="quick-pill" type="button" onClick={() => setSaleEditor((current) => roundSaleTotal(current, Math.ceil(current.totalAmount / 500) * 500, settings.weightPrecision))}>
-                      До 500
-                    </button>
+              {toolPanel === "change" && (
+                <Panel title="Расчет сдачи">
+                  <div className="change-grid">
+                    <MetricCard label="К оплате" value={`${formatMoney(checkoutTotal)} ₽`} accent="primary" />
+                    <MetricCard label="Получено" value={`${formatMoney(receivedAmount)} ₽`} />
+                    <MetricCard label="Сдача" value={`${formatMoney(checkoutChange)} ₽`} accent="primary" />
                   </div>
                   <div className="panel-actions">
-                    <button className="secondary-button" type="button" onClick={() => openKeypad("roundAmount", "Новая сумма", saleEditor.totalAmount, "₽")}>
+                    <button className="secondary-button" type="button" onClick={() => openKeypad("receivedAmount", "Получено от клиента", receivedAmount || "", "₽")}>
                       Ввести сумму
                     </button>
                   </div>
                 </Panel>
               )}
 
-              {toolPanel === "change" && (
-                <Panel title="Расчет сдачи">
-                  <div className="change-grid">
-                    <MetricCard label="К оплате" value={`${formatMoney(saleEditor.finalTotalAmount)} ₽`} accent="primary" />
-                    <MetricCard label="Получено" value={`${formatMoney(saleEditor.receivedAmount ?? 0)} ₽`} />
-                    <MetricCard label="Сдача" value={`${formatMoney(saleEditor.changeAmount ?? 0)} ₽`} accent="primary" />
+              <Panel title="Чек">
+                <div className="section-header">
+                  <h3>Позиции</h3>
+                  <strong>{formatMoney(checkoutTotal)} ₽</strong>
+                </div>
+                {saleCart.length === 0 ? (
+                  <EmptyState title="Чек пока пустой" text="Введите вес или сумму и нажмите «В чек». Текущая позиция также продастся сразу по кнопке «ПРОДАТЬ»." />
+                ) : (
+                  <div className="list-stack">
+                    {saleCart.map((line) => (
+                      <ListCard
+                        key={line.id}
+                        title={line.productName}
+                        subtitle={`${formatWeight(line.quantity, settings.weightPrecision)} кг x ${formatMoney(line.salePrice)} ₽`}
+                        meta={line.discountAmount ? `Скидка ${formatMoney(line.discountAmount)} ₽` : "В чеке"}
+                        side={`${formatMoney(line.finalTotalAmount)} ₽`}
+                        actions={
+                          <button className="ghost-button danger" type="button" onClick={() => removeCartLine(line.id)}>
+                            <Trash2 size={16} /> Убрать
+                          </button>
+                        }
+                      />
+                    ))}
                   </div>
-                  <div className="panel-actions">
-                    <button className="secondary-button" type="button" onClick={() => openKeypad("receivedAmount", "Получено от клиента", saleEditor.receivedAmount ?? "", "₽")}>
-                      Ввести сумму
-                    </button>
-                  </div>
-                </Panel>
-              )}
+                )}
+              </Panel>
 
               <NumberPad
                 keypad={keypad}
                 preview={keypadPreview}
                 productName={selectedProduct?.displayName ?? "Нет товара"}
                 weightPrecision={settings.weightPrecision}
+                checkoutTotal={checkoutTotal}
+                receivedAmount={receivedAmount}
                 onAppend={appendKey}
                 onBackspace={backspaceKey}
                 onClear={clearKeypad}
@@ -1069,7 +1226,7 @@ function App() {
 
             <div className="sell-bar">
               <button className="sell-button" type="button" onClick={() => void persistSale()}>
-                ПРОДАТЬ
+                ПРОДАТЬ {checkoutTotal > 0 ? `${formatMoney(checkoutTotal)} ₽` : ""}
               </button>
             </div>
           </>
@@ -1611,7 +1768,7 @@ function MetricCard({
   accent?: "primary" | "danger";
 }) {
   return (
-    <div className={`metric-card ${accent ?? ""}`.trim()}>
+    <div className={`metric-card ${accent ?? ""} ${onClick ? "clickable" : ""}`.trim()} onClick={onClick}>
       <span>{label}</span>
       <strong>{value}</strong>
       {buttonLabel && onClick && (
@@ -1712,6 +1869,8 @@ function NumberPad({
   preview,
   productName,
   weightPrecision,
+  checkoutTotal,
+  receivedAmount,
   onAppend,
   onBackspace,
   onClear,
@@ -1722,13 +1881,15 @@ function NumberPad({
   preview: SaleEditor;
   productName: string;
   weightPrecision: number;
+  checkoutTotal: number;
+  receivedAmount: number;
   onAppend: (key: string) => void;
   onBackspace: () => void;
   onClear: () => void;
   onSubmit: () => void;
   onClose: () => void;
 }) {
-  const numberKeys = ["1", "2", "3", "4", "5", "6", "7", "8", "9", ".", "0"];
+  const numberKeys = ["7", "8", "9", "/", "4", "5", "6", "*", "1", "2", "3", "-", ".", "0", "+"]; 
 
   if (!keypad) {
     return null;
@@ -1759,6 +1920,18 @@ function NumberPad({
             <span>Сумма</span>
             <strong>{formatMoney(preview.totalAmount)} ₽</strong>
           </div>
+          {keypad.field === "receivedAmount" ? (
+            <>
+              <div className="pad-live-row emphasis">
+                <span>Получено</span>
+                <strong>{formatMoney(Number.isFinite(evaluateExpression(keypad.value)) ? evaluateExpression(keypad.value) : receivedAmount)} ₽</strong>
+              </div>
+              <div className="pad-live-row total">
+                <span>К оплате</span>
+                <strong>{formatMoney(checkoutTotal)} ₽</strong>
+              </div>
+            </>
+          ) : null}
           {preview.discountAmount ? (
             <div className="pad-live-row total">
               <span>Итого</span>
@@ -1769,8 +1942,8 @@ function NumberPad({
         <div className="pad-display">{`${keypad.value || 0} ${keypad.suffix}`}</div>
         <div className="pad-grid">
           {numberKeys.map((key) => (
-            <button key={key} className="pad-key" type="button" onClick={() => onAppend(key)}>
-              {key}
+            <button key={key} className={`pad-key ${["+", "-", "*", "/"].includes(key) ? "operator" : ""}`.trim()} type="button" onClick={() => onAppend(key)}>
+              {key === "*" ? "×" : key === "/" ? "÷" : key}
             </button>
           ))}
           <button className="pad-key utility" type="button" onClick={onClear}>
