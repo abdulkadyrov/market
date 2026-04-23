@@ -1,1 +1,1 @@
-{"root":["./src/App.tsx","./src/constants.ts","./src/db.ts","./src/main.tsx","./src/seed.ts","./src/types.ts","./src/utils.ts","./src/vite-env.d.ts","./src/services/exportImport.ts","./src/services/inventory.ts","./src/services/reports.ts"],"version":"5.9.3"}
+{"root":["./src/App.tsx","./src/db.ts","./src/logic.ts","./src/main.tsx","./src/seed.ts","./src/types.ts","./src/utils.ts","./src/vite-env.d.ts","./src/services/exportImport.ts"],"version":"5.9.3"}
