@@ -215,7 +215,7 @@ function App() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const stockGroups = useLiveQuery(() => db.stockGroups.toArray(), [], []) ?? [];
-  const products = useLiveQuery(() => db.products.orderBy("createdAt").toArray(), [], []) ?? [];
+  const products = useLiveQuery(() => db.products.orderBy("updatedAt").toArray(), [], []) ?? [];
   const receipts = useLiveQuery(() => db.receipts.orderBy("date").reverse().toArray(), [], []) ?? [];
   const sales = useLiveQuery(() => db.sales.orderBy("date").reverse().toArray(), [], []) ?? [];
   const expenses = useLiveQuery(() => db.expenses.orderBy("date").reverse().toArray(), [], []) ?? [];
