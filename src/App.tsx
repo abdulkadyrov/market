@@ -977,6 +977,108 @@ function App() {
     showToast("Импорт завершен");
   };
 
+  const clearSalesHistory = async () => {
+    const allSales = await db.sales.toArray();
+
+    await db.transaction("rw", db.sales, db.products, db.stockGroups, async () => {
+      for (const sale of allSales) {
+        if (sale.stockGroupId) {
+          const group = await db.stockGroups.get(sale.stockGroupId);
+          if (group) {
+            await db.stockGroups.put({
+              ...group,
+              currentStock: toMoney(group.currentStock + sale.quantity),
+              updatedAt: nowIso()
+            });
+          }
+        } else {
+          const product = await db.products.get(sale.productId);
+          if (product) {
+            await db.products.put({
+              ...product,
+              currentStock: toMoney(product.currentStock + sale.quantity),
+              updatedAt: nowIso()
+            });
+          }
+        }
+      }
+
+      await db.sales.clear();
+    });
+
+    resetEntireCheckout(selectedProduct);
+    showToast("История продаж очищена");
+  };
+
+  const clearReceiptsHistory = async () => {
+    const allReceipts = await db.receipts.toArray();
+
+    await db.transaction("rw", db.receipts, db.products, db.stockGroups, async () => {
+      for (const receipt of allReceipts) {
+        if (receipt.stockGroupId) {
+          const group = await db.stockGroups.get(receipt.stockGroupId);
+          if (group) {
+            await db.stockGroups.put({
+              ...group,
+              currentStock: toMoney(Math.max(0, group.currentStock - receipt.quantity)),
+              updatedAt: nowIso()
+            });
+          }
+        } else if (receipt.productId) {
+          const product = await db.products.get(receipt.productId);
+          if (product) {
+            await db.products.put({
+              ...product,
+              currentStock: toMoney(Math.max(0, product.currentStock - receipt.quantity)),
+              updatedAt: nowIso()
+            });
+          }
+        }
+      }
+
+      await db.receipts.clear();
+    });
+
+    showToast("Поступления очищены");
+  };
+
+  const clearWriteOffsHistory = async () => {
+    const allWriteOffs = await db.writeOffs.toArray();
+
+    await db.transaction("rw", db.writeOffs, db.products, db.stockGroups, async () => {
+      for (const writeOff of allWriteOffs) {
+        if (writeOff.stockGroupId) {
+          const group = await db.stockGroups.get(writeOff.stockGroupId);
+          if (group) {
+            await db.stockGroups.put({
+              ...group,
+              currentStock: toMoney(group.currentStock + writeOff.quantity),
+              updatedAt: nowIso()
+            });
+          }
+        } else if (writeOff.productId) {
+          const product = await db.products.get(writeOff.productId);
+          if (product) {
+            await db.products.put({
+              ...product,
+              currentStock: toMoney(product.currentStock + writeOff.quantity),
+              updatedAt: nowIso()
+            });
+          }
+        }
+      }
+
+      await db.writeOffs.clear();
+    });
+
+    showToast("Списания очищены");
+  };
+
+  const clearExpensesHistory = async () => {
+    await db.expenses.clear();
+    showToast("Расходы очищены");
+  };
+
   const resetToDemo = async () => {
     await db.delete();
     window.location.reload();
@@ -1664,6 +1766,124 @@ function App() {
                   <strong>Офлайн-режим</strong>
                   <p>Приложение хранит данные в IndexedDB через Dexie и работает после установки как PWA.</p>
                 </div>
+              </div>
+            </Section>
+
+            <Section>
+              <div className="section-header">
+                <h2>Опасные действия</h2>
+                <span>С удалением данных</span>
+              </div>
+              <div className="note-card">
+                <strong>Сначала сделайте экспорт JSON</strong>
+                <p>Очистка истории меняет отчеты и может изменить остатки. Для полного восстановления потом используйте импорт backup.</p>
+              </div>
+              <div className="list-stack">
+                <ListCard
+                  title="Очистить продажи"
+                  subtitle="Удалить все продажи"
+                  meta="Остаток будет возвращен обратно"
+                  side="Опасно"
+                  actions={
+                    <button
+                      className="ghost-button danger"
+                      type="button"
+                      onClick={() =>
+                        setConfirm({
+                          title: "Очистить всю историю продаж?",
+                          text: "Все продажи будут удалены, а остатки вернутся обратно.",
+                          action: () => clearSalesHistory()
+                        })
+                      }
+                    >
+                      <Trash2 size={16} /> Очистить
+                    </button>
+                  }
+                />
+                <ListCard
+                  title="Очистить поступления"
+                  subtitle="Удалить все поступления"
+                  meta="Остаток будет уменьшен обратно"
+                  side="Опасно"
+                  actions={
+                    <button
+                      className="ghost-button danger"
+                      type="button"
+                      onClick={() =>
+                        setConfirm({
+                          title: "Очистить все поступления?",
+                          text: "Все поступления будут удалены, остатки уменьшатся. Средняя себестоимость не пересчитывается назад автоматически.",
+                          action: () => clearReceiptsHistory()
+                        })
+                      }
+                    >
+                      <Trash2 size={16} /> Очистить
+                    </button>
+                  }
+                />
+                <ListCard
+                  title="Очистить списания"
+                  subtitle="Удалить все списания"
+                  meta="Списанный остаток вернется обратно"
+                  side="Опасно"
+                  actions={
+                    <button
+                      className="ghost-button danger"
+                      type="button"
+                      onClick={() =>
+                        setConfirm({
+                          title: "Очистить все списания?",
+                          text: "Все списания будут удалены, остатки вернутся обратно.",
+                          action: () => clearWriteOffsHistory()
+                        })
+                      }
+                    >
+                      <Trash2 size={16} /> Очистить
+                    </button>
+                  }
+                />
+                <ListCard
+                  title="Очистить расходы"
+                  subtitle="Удалить все расходы"
+                  meta="На остатки не влияет"
+                  side="Опасно"
+                  actions={
+                    <button
+                      className="ghost-button danger"
+                      type="button"
+                      onClick={() =>
+                        setConfirm({
+                          title: "Очистить все расходы?",
+                          text: "Все расходы будут удалены из истории и отчетов.",
+                          action: () => clearExpensesHistory()
+                        })
+                      }
+                    >
+                      <Trash2 size={16} /> Очистить
+                    </button>
+                  }
+                />
+                <ListCard
+                  title="Полный сброс базы"
+                  subtitle="Вернуть демо-данные"
+                  meta="Удалит все локальные данные на устройстве"
+                  side="Очень опасно"
+                  actions={
+                    <button
+                      className="ghost-button danger"
+                      type="button"
+                      onClick={() =>
+                        setConfirm({
+                          title: "Полностью сбросить базу?",
+                          text: "Все локальные данные будут удалены, затем приложение загрузится заново с demo-данными.",
+                          action: () => resetToDemo()
+                        })
+                      }
+                    >
+                      <RotateCcw size={16} /> Сбросить базу
+                    </button>
+                  }
+                />
               </div>
             </Section>
 
