@@ -378,6 +378,10 @@ h2 {
   gap: 12px;
 }
 
+.reset-sale-button {
+  grid-column: 1 / -1;
+}
+
 .panel-actions {
   flex-wrap: wrap;
 }
@@ -418,6 +422,50 @@ h2 {
 .pad-key.confirm {
   background: var(--accent);
   color: #fff;
+}
+
+.floating-pad-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  background: rgba(27, 19, 8, 0.32);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding: 16px 14px calc(14px + env(safe-area-inset-bottom));
+}
+
+.number-pad.floating {
+  width: min(100%, 720px);
+  max-height: 88vh;
+  overflow: auto;
+  border-bottom-left-radius: 18px;
+  border-bottom-right-radius: 18px;
+}
+
+.pad-live-summary {
+  display: grid;
+  gap: 8px;
+  background: var(--surface-muted);
+  border-radius: 22px;
+  padding: 14px;
+}
+
+.pad-live-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: baseline;
+}
+
+.pad-live-row.emphasis strong,
+.pad-live-row.total strong {
+  font-size: 28px;
+}
+
+.pad-live-row.total {
+  padding-top: 8px;
+  border-top: 1px solid rgba(111, 96, 79, 0.25);
 }
 
 .pad-key:disabled {
@@ -584,6 +632,14 @@ h2 {
   }
 
   .price-badge {
+    width: 100%;
+  }
+
+  .floating-pad-backdrop {
+    padding-inline: 8px;
+  }
+
+  .number-pad.floating {
     width: 100%;
   }
 }

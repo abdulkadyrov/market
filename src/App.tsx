@@ -99,6 +99,7 @@ interface KeypadState {
   title: string;
   suffix: string;
   value: string;
+  submitLabel: string;
 }
 
 interface ProductDraft extends Product {}
@@ -384,9 +385,43 @@ function App() {
       field,
       title,
       suffix,
-      value: String(value || "")
+      value: String(value || ""),
+      submitLabel: suffix === "кг" ? "кг" : suffix === "₽" ? "₽" : "OK"
     });
   };
+
+  const keypadPreview = useMemo(() => {
+    if (!keypad) {
+      return saleEditor;
+    }
+
+    const value = parseNumber(keypad.value);
+    const precision = settings.weightPrecision;
+
+    if (keypad.field === "quantity") {
+      return editWeight(saleEditor, value, precision);
+    }
+    if (keypad.field === "totalAmount") {
+      return editTotal(saleEditor, value, precision);
+    }
+    if (keypad.field === "salePrice") {
+      return editPrice(saleEditor, value, precision);
+    }
+    if (keypad.field === "discountAmount") {
+      return applyDiscount(saleEditor, "amount", value, precision);
+    }
+    if (keypad.field === "discountPercent") {
+      return applyDiscount(saleEditor, "percent", value, precision);
+    }
+    if (keypad.field === "receivedAmount") {
+      return setReceivedAmount(saleEditor, value, precision);
+    }
+    if (keypad.field === "roundAmount") {
+      return roundSaleTotal(saleEditor, value, precision);
+    }
+
+    return saleEditor;
+  }, [keypad, saleEditor, settings.weightPrecision]);
 
   const submitKeypad = () => {
     if (!keypad) {
@@ -923,6 +958,18 @@ function App() {
                 >
                   Очистить
                 </ActionButton>
+                <button
+                  className="danger-button reset-sale-button"
+                  type="button"
+                  onClick={() => {
+                    if (!selectedProduct) {
+                      return;
+                    }
+                    resetSale(selectedProduct);
+                  }}
+                >
+                  Сбросить все
+                </button>
               </div>
 
               {quickButtons.length > 0 && (
@@ -1009,6 +1056,9 @@ function App() {
 
               <NumberPad
                 keypad={keypad}
+                preview={keypadPreview}
+                productName={selectedProduct?.displayName ?? "Нет товара"}
+                weightPrecision={settings.weightPrecision}
                 onAppend={appendKey}
                 onBackspace={backspaceKey}
                 onClear={clearKeypad}
@@ -1659,6 +1709,9 @@ function EmptyState({ title, text }: { title: string; text: string }) {
 
 function NumberPad({
   keypad,
+  preview,
+  productName,
+  weightPrecision,
   onAppend,
   onBackspace,
   onClear,
@@ -1666,6 +1719,9 @@ function NumberPad({
   onClose
 }: {
   keypad: KeypadState | null;
+  preview: SaleEditor;
+  productName: string;
+  weightPrecision: number;
   onAppend: (key: string) => void;
   onBackspace: () => void;
   onClear: () => void;
@@ -1674,41 +1730,62 @@ function NumberPad({
 }) {
   const numberKeys = ["1", "2", "3", "4", "5", "6", "7", "8", "9", ".", "0"];
 
+  if (!keypad) {
+    return null;
+  }
+
   return (
-    <div className="number-pad">
-      <div className="section-header">
-        <div>
-          <h3>{keypad?.title ?? "Панель ввода"}</h3>
-          <p>{keypad ? keypad.suffix : "Выберите вес, сумму или цену"}</p>
-        </div>
-        {keypad ? (
+    <div className="floating-pad-backdrop" onClick={onClose}>
+      <div className="number-pad floating" onClick={(event) => event.stopPropagation()}>
+        <div className="section-header">
+          <div>
+            <h3>{keypad.title}</h3>
+            <p>{productName}</p>
+          </div>
           <button className="icon-button" type="button" onClick={onClose}>
             <X size={18} />
           </button>
-        ) : null}
-      </div>
-      <div className="pad-display">{keypad ? `${keypad.value || 0} ${keypad.suffix}` : "0"}</div>
-      <div className="pad-grid">
-        {numberKeys.map((key) => (
-          <button key={key} className="pad-key" type="button" disabled={!keypad} onClick={() => onAppend(key)}>
-            {key}
+        </div>
+        <div className="pad-live-summary">
+          <div className="pad-live-row">
+            <span>Цена</span>
+            <strong>{formatMoney(preview.salePrice)} ₽/кг</strong>
+          </div>
+          <div className="pad-live-row emphasis">
+            <span>Вес</span>
+            <strong>{formatWeight(preview.quantity, weightPrecision)} кг</strong>
+          </div>
+          <div className="pad-live-row emphasis">
+            <span>Сумма</span>
+            <strong>{formatMoney(preview.totalAmount)} ₽</strong>
+          </div>
+          {preview.discountAmount ? (
+            <div className="pad-live-row total">
+              <span>Итого</span>
+              <strong>{formatMoney(preview.finalTotalAmount)} ₽</strong>
+            </div>
+          ) : null}
+        </div>
+        <div className="pad-display">{`${keypad.value || 0} ${keypad.suffix}`}</div>
+        <div className="pad-grid">
+          {numberKeys.map((key) => (
+            <button key={key} className="pad-key" type="button" onClick={() => onAppend(key)}>
+              {key}
+            </button>
+          ))}
+          <button className="pad-key utility" type="button" onClick={onClear}>
+            C
           </button>
-        ))}
-        <button className="pad-key utility" type="button" disabled={!keypad} onClick={onClear}>
-          C
-        </button>
-        <button className="pad-key utility" type="button" disabled={!keypad} onClick={onBackspace}>
-          ←
-        </button>
-        <button className="pad-key utility" type="button" disabled={!keypad} onClick={onSubmit}>
-          кг
-        </button>
-        <button className="pad-key utility" type="button" disabled={!keypad} onClick={onSubmit}>
-          ₽
-        </button>
-        <button className="pad-key confirm" type="button" disabled={!keypad} onClick={onSubmit}>
-          OK
-        </button>
+          <button className="pad-key utility" type="button" onClick={onBackspace}>
+            ←
+          </button>
+          <button className="pad-key utility" type="button" onClick={onSubmit}>
+            {keypad.submitLabel}
+          </button>
+          <button className="pad-key confirm" type="button" onClick={onSubmit}>
+            OK
+          </button>
+        </div>
       </div>
     </div>
   );
