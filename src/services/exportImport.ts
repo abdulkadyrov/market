@@ -42,17 +42,19 @@ export const importSnapshot = async (file: File) => {
 
   await db.transaction(
     "rw",
-    db.products,
-    db.receipts,
-    db.sales,
-    db.buyers,
-    db.expenses,
-    db.writeOffs,
-    db.stockAdjustments,
-    db.debtPayments,
-    db.quickButtonSettings,
-    db.appSettings,
-    db.operationLogs,
+    [
+      db.products,
+      db.receipts,
+      db.sales,
+      db.buyers,
+      db.expenses,
+      db.writeOffs,
+      db.stockAdjustments,
+      db.debtPayments,
+      db.quickButtonSettings,
+      db.appSettings,
+      db.operationLogs
+    ],
     async () => {
       await Promise.all([
         db.products.clear(),

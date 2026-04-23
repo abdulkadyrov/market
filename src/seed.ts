@@ -323,17 +323,19 @@ export const seedDatabase = async () => {
 
   await db.transaction(
     "rw",
-    db.products,
-    db.receipts,
-    db.sales,
-    db.buyers,
-    db.expenses,
-    db.writeOffs,
-    db.stockAdjustments,
-    db.debtPayments,
-    db.quickButtonSettings,
-    db.appSettings,
-    db.operationLogs,
+    [
+      db.products,
+      db.receipts,
+      db.sales,
+      db.buyers,
+      db.expenses,
+      db.writeOffs,
+      db.stockAdjustments,
+      db.debtPayments,
+      db.quickButtonSettings,
+      db.appSettings,
+      db.operationLogs
+    ],
     async () => {
       await db.products.bulkAdd(products);
       await db.receipts.bulkAdd(receipts);
