@@ -13,27 +13,21 @@ export const exportSnapshot = async (): Promise<AppSnapshot> => ({
 });
 
 export const importSnapshot = async (snapshot: AppSnapshot) => {
-  await db.transaction(
-    "rw",
-    [db.stockGroups, db.products, db.receipts, db.sales, db.expenses, db.writeOffs, db.quickButtonSettings, db.appSettings],
-    async () => {
-      await db.stockGroups.clear();
-      await db.products.clear();
-      await db.receipts.clear();
-      await db.sales.clear();
-      await db.expenses.clear();
-      await db.writeOffs.clear();
-      await db.quickButtonSettings.clear();
-      await db.appSettings.clear();
+  await db.stockGroups.clear();
+  await db.products.clear();
+  await db.receipts.clear();
+  await db.sales.clear();
+  await db.expenses.clear();
+  await db.writeOffs.clear();
+  await db.quickButtonSettings.clear();
+  await db.appSettings.clear();
 
-      await db.stockGroups.bulkPut(snapshot.stockGroups);
-      await db.products.bulkPut(snapshot.products);
-      await db.receipts.bulkPut(snapshot.receipts);
-      await db.sales.bulkPut(snapshot.sales);
-      await db.expenses.bulkPut(snapshot.expenses);
-      await db.writeOffs.bulkPut(snapshot.writeOffs);
-      await db.quickButtonSettings.bulkPut(snapshot.quickButtonSettings);
-      await db.appSettings.bulkPut(snapshot.appSettings);
-    }
-  );
+  await db.stockGroups.bulkPut(snapshot.stockGroups);
+  await db.products.bulkPut(snapshot.products);
+  await db.receipts.bulkPut(snapshot.receipts);
+  await db.sales.bulkPut(snapshot.sales);
+  await db.expenses.bulkPut(snapshot.expenses);
+  await db.writeOffs.bulkPut(snapshot.writeOffs);
+  await db.quickButtonSettings.bulkPut(snapshot.quickButtonSettings);
+  await db.appSettings.bulkPut(snapshot.appSettings);
 };

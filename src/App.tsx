@@ -198,6 +198,7 @@ const emptyExpenseDraft = (): ExpenseDraft => ({
 });
 
 function App() {
+  const [startupError, setStartupError] = useState<string>("");
   const [screen, setScreen] = useState<Screen>("sale");
   const [selectedProductId, setSelectedProductId] = useState("");
   const [saleEditor, setSaleEditor] = useState<SaleEditor>(createEmptySaleEditor());
@@ -225,7 +226,13 @@ function App() {
   const settings = appSettings ?? defaultSettings;
 
   useEffect(() => {
-    void seedDatabase();
+    void (async () => {
+      try {
+        await seedDatabase();
+      } catch (error) {
+        setStartupError(error instanceof Error ? error.message : String(error));
+      }
+    })();
   }, []);
 
   useEffect(() => {
@@ -778,6 +785,19 @@ function App() {
       updatedAt: nowIso()
     });
   };
+
+  if (startupError) {
+    return (
+      <div className="app-shell">
+        <section className="section">
+          <div className="eyebrow">Ошибка локальной базы</div>
+          <h1>Не удалось открыть данные</h1>
+          <p className="muted">{startupError}</p>
+          <p className="muted">Чаще всего это связано с ограничением IndexedDB или старым кэшем Safari.</p>
+        </section>
+      </div>
+    );
+  }
 
   return (
     <div className="app-shell">

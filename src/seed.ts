@@ -291,18 +291,12 @@ export const seedDatabase = async () => {
     return;
   }
 
-  await db.transaction(
-    "rw",
-    [db.stockGroups, db.products, db.receipts, db.sales, db.expenses, db.writeOffs, db.quickButtonSettings, db.appSettings],
-    async () => {
-      await db.stockGroups.bulkAdd(stockGroups);
-      await db.products.bulkAdd(products);
-      await db.receipts.bulkAdd(receipts);
-      await db.sales.bulkAdd(sales);
-      await db.expenses.bulkAdd(expenses);
-      await db.writeOffs.bulkAdd(writeOffs);
-      await db.quickButtonSettings.bulkAdd(quickButtons);
-      await db.appSettings.bulkAdd(appSettings);
-    }
-  );
+  await db.stockGroups.bulkAdd(stockGroups);
+  await db.products.bulkAdd(products);
+  await db.receipts.bulkAdd(receipts);
+  await db.sales.bulkAdd(sales);
+  await db.expenses.bulkAdd(expenses);
+  await db.writeOffs.bulkAdd(writeOffs);
+  await db.quickButtonSettings.bulkAdd(quickButtons);
+  await db.appSettings.bulkAdd(appSettings);
 };
