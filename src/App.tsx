@@ -223,6 +223,7 @@ function App() {
   const [selectedProductId, setSelectedProductId] = useState("");
   const [saleEditor, setSaleEditor] = useState<SaleEditor>(createEmptySaleEditor());
   const [saleCart, setSaleCart] = useState<CartLine[]>([]);
+  const [isSavingSale, setIsSavingSale] = useState(false);
   const [receivedAmount, setReceivedAmountState] = useState<number>(0);
   const [keypad, setKeypad] = useState<KeypadState | null>(null);
   const [toolPanel, setToolPanel] = useState<"discount" | "change" | null>(null);
@@ -423,6 +424,17 @@ function App() {
 
   const showToast = (text: string) => setToast({ id: makeId("toast"), text });
 
+  const getProductStockSubtitle = (product: ProductView) =>
+    product.sharedStockName
+      ? `Общий остаток партии: ${formatWeight(product.availableStock, settings.weightPrecision)} кг`
+      : `Остаток: ${formatWeight(product.availableStock, settings.weightPrecision)} кг`;
+
+  const getProductStockMeta = (product: ProductView) =>
+    product.sharedStockName ? `Общая группа: ${product.sharedStockName}` : "Свободный товар";
+
+  const getProductStockSide = (product: ProductView) =>
+    product.sharedStockName ? "Общий остаток" : `${formatWeight(product.availableStock, settings.weightPrecision)} кг`;
+
   const resetSale = (product = selectedProduct) => {
     setSaleEditor(createEmptySaleEditor(product));
     setKeypad(null);
@@ -620,6 +632,10 @@ function App() {
   };
 
   const persistSale = async () => {
+    if (isSavingSale) {
+      return;
+    }
+
     const lines = [...saleCart];
 
     if (currentLineValid && selectedProduct) {
@@ -682,64 +698,71 @@ function App() {
     const timestamp = nowIso();
     const totalLinesAmount = lines.reduce((sum, line) => sum + line.finalTotalAmount, 0);
 
-    await db.transaction("rw", db.sales, db.products, db.stockGroups, async () => {
-      for (const [groupId, quantity] of groupedStockUsage) {
-        const group = await db.stockGroups.get(groupId);
-        if (!group) {
-          throw new Error("Группа остатка не найдена");
+    setIsSavingSale(true);
+    try {
+      await db.transaction("rw", db.sales, db.products, db.stockGroups, async () => {
+        for (const [groupId, quantity] of groupedStockUsage) {
+          const group = await db.stockGroups.get(groupId);
+          if (!group) {
+            throw new Error("Группа остатка не найдена");
+          }
+          await db.stockGroups.put({
+            ...group,
+            currentStock: toMoney(group.currentStock - quantity),
+            updatedAt: timestamp
+          });
         }
-        await db.stockGroups.put({
-          ...group,
-          currentStock: toMoney(group.currentStock - quantity),
-          updatedAt: timestamp
-        });
-      }
 
-      for (const [productId, quantity] of groupedProductUsage) {
-        const product = await db.products.get(productId);
-        if (!product) {
-          throw new Error("Товар не найден");
+        for (const [productId, quantity] of groupedProductUsage) {
+          const product = await db.products.get(productId);
+          if (!product) {
+            throw new Error("Товар не найден");
+          }
+          await db.products.put({
+            ...product,
+            currentStock: toMoney(product.currentStock - quantity),
+            updatedAt: timestamp
+          });
         }
-        await db.products.put({
-          ...product,
-          currentStock: toMoney(product.currentStock - quantity),
-          updatedAt: timestamp
-        });
-      }
 
-      for (const line of lines) {
-        const receivedForLine = totalLinesAmount > 0 ? toMoney((receivedAmount * line.finalTotalAmount) / totalLinesAmount) : undefined;
-        const changeForLine =
-          receivedForLine !== undefined ? toMoney(Math.max(0, receivedForLine - line.finalTotalAmount)) : undefined;
+        for (const line of lines) {
+          const receivedForLine = totalLinesAmount > 0 ? toMoney((receivedAmount * line.finalTotalAmount) / totalLinesAmount) : undefined;
+          const changeForLine =
+            receivedForLine !== undefined ? toMoney(Math.max(0, receivedForLine - line.finalTotalAmount)) : undefined;
 
-        await db.sales.add({
-          id: makeId("sale"),
-          saleBatchId: batchId,
-          productId: line.productId,
-          stockGroupId: line.stockGroupId,
-          date: timestamp,
-          quantity: line.quantity,
-          salePrice: line.salePrice,
-          totalAmount: line.totalAmount,
-          originalTotalAmount: line.originalTotalAmount,
-          discountType: line.discountType,
-          discountValue: line.discountValue,
-          discountAmount: line.discountAmount,
-          finalTotalAmount: line.finalTotalAmount,
-          receivedAmount: receivedForLine,
-          changeAmount: changeForLine,
-          mode: line.mode,
-          activeBaseField: line.activeBaseField,
-          costOfGoodsSold: toMoney(line.quantity * line.averageCost),
-          comment: lines.length > 1 ? `Чек ${batchId}` : "",
-          createdAt: timestamp,
-          updatedAt: timestamp
-        });
-      }
-    });
+          await db.sales.add({
+            id: makeId("sale"),
+            saleBatchId: batchId,
+            productId: line.productId,
+            stockGroupId: line.stockGroupId,
+            date: timestamp,
+            quantity: line.quantity,
+            salePrice: line.salePrice,
+            totalAmount: line.totalAmount,
+            originalTotalAmount: line.originalTotalAmount,
+            discountType: line.discountType,
+            discountValue: line.discountValue,
+            discountAmount: line.discountAmount,
+            finalTotalAmount: line.finalTotalAmount,
+            receivedAmount: receivedForLine,
+            changeAmount: changeForLine,
+            mode: line.mode,
+            activeBaseField: line.activeBaseField,
+            costOfGoodsSold: toMoney(line.quantity * line.averageCost),
+            comment: lines.length > 1 ? `Чек ${batchId}` : "",
+            createdAt: timestamp,
+            updatedAt: timestamp
+          });
+        }
+      });
 
-    showToast("Продано");
-    resetEntireCheckout(selectedProduct);
+      showToast("Продано");
+      resetEntireCheckout(selectedProduct);
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : "Не удалось сохранить продажу");
+    } finally {
+      setIsSavingSale(false);
+    }
   };
 
   const saveProduct = async () => {
@@ -753,6 +776,8 @@ function App() {
     const payload: Product = {
       ...productDraft,
       stockGroupId: productDraft.stockGroupId || undefined,
+      currentStock: productDraft.stockGroupId ? 0 : productDraft.currentStock,
+      averageCost: productDraft.stockGroupId ? 0 : productDraft.averageCost,
       updatedAt: nowIso()
     };
     await db.products.put(payload);
@@ -1156,7 +1181,7 @@ function App() {
                   >
                     <strong>{product.displayName}</strong>
                     <span>{formatMoney(product.defaultSalePrice)} ₽/кг</span>
-                    <span>{product.sharedStockName ? `Группа: ${formatWeight(product.availableStock, settings.weightPrecision)} кг` : `Остаток: ${formatWeight(product.availableStock, settings.weightPrecision)} кг`}</span>
+                    <span>{getProductStockSubtitle(product)}</span>
                   </button>
                 ))}
               </div>
@@ -1348,8 +1373,8 @@ function App() {
             </Section>
 
             <div className="sell-bar">
-              <button className="sell-button" type="button" onClick={() => void persistSale()}>
-                ПРОДАТЬ {checkoutTotal > 0 ? `${formatMoney(checkoutTotal)} ₽` : ""}
+              <button className="sell-button" type="button" onClick={() => void persistSale()} disabled={isSavingSale}>
+                {isSavingSale ? "СОХРАНЕНИЕ..." : `ПРОДАТЬ ${checkoutTotal > 0 ? `${formatMoney(checkoutTotal)} ₽` : ""}`.trim()}
               </button>
             </div>
           </>
@@ -1413,8 +1438,8 @@ function App() {
                     key={product.id}
                     title={product.displayName}
                     subtitle={`${formatMoney(product.defaultSalePrice)} ₽/кг`}
-                    meta={product.sharedStockName ? `Общая группа: ${product.sharedStockName}` : `Свободный товар`}
-                    side={`${formatWeight(product.availableStock, settings.weightPrecision)} кг`}
+                    meta={getProductStockMeta(product)}
+                    side={getProductStockSide(product)}
                     actions={
                       <>
                         <button className="ghost-button" type="button" onClick={() => setProductDraft({ ...products.find((item) => item.id === product.id)! })}>
@@ -1733,8 +1758,8 @@ function App() {
                     key={product.id}
                     title={product.displayName}
                     subtitle={`${formatMoney(product.defaultSalePrice)} ₽/кг`}
-                    meta={product.sharedStockName ? `Общая партия` : "Обычный товар"}
-                    side={`${formatWeight(product.availableStock, settings.weightPrecision)} кг`}
+                    meta={getProductStockSubtitle(product)}
+                    side={getProductStockSide(product)}
                   />
                 ))}
               </div>

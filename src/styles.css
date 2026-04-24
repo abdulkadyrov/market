@@ -504,6 +504,11 @@ h2 {
   box-shadow: 0 18px 44px rgba(15, 93, 57, 0.28);
 }
 
+.sell-button:disabled {
+  opacity: 0.7;
+  cursor: wait;
+}
+
 .editor-card {
   display: flex;
   flex-direction: column;
