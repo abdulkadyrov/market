@@ -25,6 +25,7 @@ export interface Product {
   unit: Unit;
   stockGroupId?: string;
   currentStock: number;
+  isUnlimitedStock?: boolean;
   averageCost: number;
   defaultSalePrice: number;
   notes: string;
