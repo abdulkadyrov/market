@@ -166,6 +166,7 @@ const emptyProductDraft = (): ProductDraft => ({
   category: "Овощи",
   unit: "kg",
   currentStock: 0,
+  isUnlimitedStock: false,
   averageCost: 0,
   defaultSalePrice: 0,
   notes: "",
@@ -409,10 +410,12 @@ function App() {
     !!selectedProduct && saleEditor.quantity > 0 && saleEditor.salePrice > 0 && saleEditor.finalTotalAmount > 0;
 
   const currentLineStockLeft = selectedProduct
-    ? selectedProduct.availableStock -
-      (selectedProduct.stockGroupId
-        ? reservedStockByGroup.get(selectedProduct.stockGroupId) ?? 0
-        : reservedStockByProduct.get(selectedProduct.id) ?? 0)
+    ? hasUnlimitedStock(selectedProduct)
+      ? Number.POSITIVE_INFINITY
+      : selectedProduct.availableStock -
+        (selectedProduct.stockGroupId
+          ? reservedStockByGroup.get(selectedProduct.stockGroupId) ?? 0
+          : reservedStockByProduct.get(selectedProduct.id) ?? 0)
     : 0;
 
   const checkoutCurrentIncluded = currentLineValid ? saleEditor.finalTotalAmount : 0;
@@ -424,16 +427,30 @@ function App() {
 
   const showToast = (text: string) => setToast({ id: makeId("toast"), text });
 
+  function hasUnlimitedStock(product?: ProductView | Product | null) {
+    return Boolean(product?.isUnlimitedStock && !product?.stockGroupId);
+  }
+
   const getProductStockSubtitle = (product: ProductView) =>
-    product.sharedStockName
-      ? `Общий остаток партии: ${formatWeight(product.availableStock, settings.weightPrecision)} кг`
-      : `Остаток: ${formatWeight(product.availableStock, settings.weightPrecision)} кг`;
+    hasUnlimitedStock(product)
+      ? "Остаток: без ограничения"
+      : product.sharedStockName
+        ? `Общий остаток партии: ${formatWeight(product.availableStock, settings.weightPrecision)} кг`
+        : `Остаток: ${formatWeight(product.availableStock, settings.weightPrecision)} кг`;
 
   const getProductStockMeta = (product: ProductView) =>
-    product.sharedStockName ? `Общая группа: ${product.sharedStockName}` : "Свободный товар";
+    hasUnlimitedStock(product)
+      ? "Свободный товар без ограничения остатка"
+      : product.sharedStockName
+        ? `Общая группа: ${product.sharedStockName}`
+        : "Свободный товар";
 
   const getProductStockSide = (product: ProductView) =>
-    product.sharedStockName ? "Общий остаток" : `${formatWeight(product.availableStock, settings.weightPrecision)} кг`;
+    hasUnlimitedStock(product)
+      ? "∞"
+      : product.sharedStockName
+        ? "Общий остаток"
+        : `${formatWeight(product.availableStock, settings.weightPrecision)} кг`;
 
   const resetSale = (product = selectedProduct) => {
     setSaleEditor(createEmptySaleEditor(product));
@@ -688,7 +705,7 @@ function App() {
 
     for (const [productId, quantity] of groupedProductUsage) {
       const product = productViewMap.get(productId);
-      if (product && product.availableStock < quantity) {
+      if (product && !hasUnlimitedStock(product) && product.availableStock < quantity) {
         showToast(`Недостаточно остатка: ${product.displayName}`);
         return;
       }
@@ -717,6 +734,9 @@ function App() {
           const product = await db.products.get(productId);
           if (!product) {
             throw new Error("Товар не найден");
+          }
+          if (hasUnlimitedStock(product)) {
+            continue;
           }
           await db.products.put({
             ...product,
@@ -777,6 +797,7 @@ function App() {
       ...productDraft,
       stockGroupId: productDraft.stockGroupId || undefined,
       currentStock: productDraft.stockGroupId ? 0 : productDraft.currentStock,
+      isUnlimitedStock: productDraft.stockGroupId ? false : productDraft.isUnlimitedStock,
       averageCost: productDraft.stockGroupId ? 0 : productDraft.averageCost,
       updatedAt: nowIso()
     };
@@ -1193,9 +1214,11 @@ function App() {
                   <div className="eyebrow">Выбран товар</div>
                   <h2>{selectedProduct?.displayName ?? "Нет товара"}</h2>
                   <p className="muted">
-                    {selectedProduct?.sharedStockName
-                      ? `Общий остаток группы: ${formatWeight(selectedProduct.availableStock, settings.weightPrecision)} кг`
-                      : `Остаток: ${formatWeight(selectedProduct?.availableStock ?? 0, settings.weightPrecision)} кг`}
+                    {hasUnlimitedStock(selectedProduct)
+                      ? "Продажа без ограничения остатка"
+                      : selectedProduct?.sharedStockName
+                        ? `Общий остаток группы: ${formatWeight(selectedProduct.availableStock, settings.weightPrecision)} кг`
+                        : `Остаток: ${formatWeight(selectedProduct?.availableStock ?? 0, settings.weightPrecision)} кг`}
                   </p>
                 </div>
                 <button
@@ -1408,7 +1431,16 @@ function App() {
                     <input inputMode="decimal" value={String(productDraft.defaultSalePrice || "")} onChange={(event) => setProductDraft({ ...productDraft, defaultSalePrice: parseNumber(event.target.value) })} />
                   </Field>
                   <Field label="Связать с общей партией">
-                    <select value={productDraft.stockGroupId ?? ""} onChange={(event) => setProductDraft({ ...productDraft, stockGroupId: event.target.value || undefined })}>
+                    <select
+                      value={productDraft.stockGroupId ?? ""}
+                      onChange={(event) =>
+                        setProductDraft({
+                          ...productDraft,
+                          stockGroupId: event.target.value || undefined,
+                          isUnlimitedStock: event.target.value ? false : productDraft.isUnlimitedStock
+                        })
+                      }
+                    >
                       <option value="">Без общей партии</option>
                       {stockGroups.map((group) => (
                         <option key={group.id} value={group.id}>
@@ -1419,8 +1451,23 @@ function App() {
                   </Field>
                   {!productDraft.stockGroupId && (
                     <>
+                      <Field label="Режим остатка">
+                        <button
+                          className={productDraft.isUnlimitedStock ? "primary-button" : "secondary-button"}
+                          type="button"
+                          onClick={() => setProductDraft({ ...productDraft, isUnlimitedStock: !productDraft.isUnlimitedStock })}
+                        >
+                          {productDraft.isUnlimitedStock ? "∞ Без ограничения" : "Включить ∞ бесконечность"}
+                        </button>
+                      </Field>
                       <Field label="Текущий остаток">
-                        <input inputMode="decimal" value={String(productDraft.currentStock || "")} onChange={(event) => setProductDraft({ ...productDraft, currentStock: parseNumber(event.target.value) })} />
+                        <input
+                          inputMode="decimal"
+                          value={productDraft.isUnlimitedStock ? "" : String(productDraft.currentStock || "")}
+                          placeholder={productDraft.isUnlimitedStock ? "∞" : "0"}
+                          disabled={productDraft.isUnlimitedStock}
+                          onChange={(event) => setProductDraft({ ...productDraft, currentStock: parseNumber(event.target.value) })}
+                        />
                       </Field>
                       <Field label="Средняя себестоимость">
                         <input inputMode="decimal" value={String(productDraft.averageCost || "")} onChange={(event) => setProductDraft({ ...productDraft, averageCost: parseNumber(event.target.value) })} />

@@ -33,6 +33,17 @@ export class MarketDatabase extends Dexie {
       quickButtonSettings: "id, type, order",
       appSettings: "id, updatedAt"
     });
+
+    this.version(2).stores({
+      stockGroups: "id, name, updatedAt",
+      products: "id, name, variant, stockGroupId, isArchived, updatedAt",
+      receipts: "id, stockGroupId, productId, date, updatedAt",
+      sales: "id, productId, stockGroupId, date, updatedAt",
+      expenses: "id, date, category, updatedAt",
+      writeOffs: "id, stockGroupId, productId, date, updatedAt",
+      quickButtonSettings: "id, type, order",
+      appSettings: "id, updatedAt"
+    });
   }
 }
 
