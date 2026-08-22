@@ -16,7 +16,8 @@ describe("проверка импортируемого снимка", () => {
   it("принимает старый снимок без метаданных и добавляет актуальную версию", () => {
     const result = parseSnapshot(emptySnapshot());
 
-    expect(result.schemaVersion).toBe(3);
+    expect(result.schemaVersion).toBe(4);
+    expect(result.bazaarLocations).toHaveLength(1);
     expect(result.storeProfiles).toHaveLength(1);
     expect(result.appSettings).toHaveLength(0);
     expect(result.exportedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);

@@ -8,7 +8,18 @@ export type ThemeMode = "light" | "contrast";
 
 export interface StoreProfile {
   id: string;
+  bazaarLocationId: string;
   name: string;
+  city: string;
+  marketName: string;
+  pointName: string;
+  isArchived: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface BazaarLocation {
+  id: string;
   city: string;
   marketName: string;
   pointName: string;
@@ -74,6 +85,9 @@ export interface Sale {
   differenceAmount?: number;
   quantity: number;
   salePrice: number;
+  originalSalePrice?: number;
+  priceDiscountAmount?: number;
+  isDiscounted?: boolean;
   totalAmount: number;
   originalTotalAmount: number;
   discountType?: DiscountType;
@@ -140,8 +154,9 @@ export interface AppSettings {
 }
 
 export interface AppSnapshot {
-  schemaVersion: 3;
+  schemaVersion: 4;
   exportedAt: string;
+  bazaarLocations: BazaarLocation[];
   storeProfiles: StoreProfile[];
   stockGroups: StockGroup[];
   products: Product[];

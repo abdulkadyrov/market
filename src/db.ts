@@ -1,6 +1,7 @@
 import Dexie, { type Table } from "dexie";
 import type {
   AppSettings,
+  BazaarLocation,
   Expense,
   Product,
   QuickButtonSetting,
@@ -13,6 +14,7 @@ import type {
 import { createDefaultProfile, DEFAULT_PROFILE_ID } from "./profiles";
 
 export class MarketDatabase extends Dexie {
+  bazaarLocations!: Table<BazaarLocation, string>;
   storeProfiles!: Table<StoreProfile, string>;
   stockGroups!: Table<StockGroup, string>;
   products!: Table<Product, string>;
@@ -75,6 +77,44 @@ export class MarketDatabase extends Dexie {
             row.activeProfileId = DEFAULT_PROFILE_ID;
           }
         });
+      });
+
+    this.version(4)
+      .stores({
+        bazaarLocations: "id, city, marketName, isArchived, updatedAt",
+        storeProfiles: "id, bazaarLocationId, name, city, isArchived, updatedAt",
+        stockGroups: "id, profileId, name, updatedAt",
+        products: "id, profileId, name, variant, stockGroupId, isArchived, updatedAt",
+        receipts: "id, profileId, stockGroupId, productId, date, updatedAt",
+        sales: "id, profileId, productId, stockGroupId, date, isDiscounted, updatedAt",
+        expenses: "id, profileId, date, category, updatedAt",
+        writeOffs: "id, profileId, stockGroupId, productId, date, updatedAt",
+        quickButtonSettings: "id, type, order",
+        appSettings: "id, activeProfileId, updatedAt"
+      })
+      .upgrade(async (transaction) => {
+        const timestamp = new Date().toISOString();
+        const profiles = await transaction.table("storeProfiles").toArray();
+        const locationByKey = new Map<string, string>();
+
+        for (const profile of profiles) {
+          const key = [profile.city, profile.marketName, profile.pointName].join("|").toLocaleLowerCase("ru");
+          let locationId = locationByKey.get(key);
+          if (!locationId) {
+            locationId = `bazaar_${profile.id}`;
+            locationByKey.set(key, locationId);
+            await transaction.table("bazaarLocations").put({
+              id: locationId,
+              city: profile.city,
+              marketName: profile.marketName,
+              pointName: profile.pointName,
+              isArchived: false,
+              createdAt: timestamp,
+              updatedAt: timestamp
+            });
+          }
+          await transaction.table("storeProfiles").put({ ...profile, bazaarLocationId: locationId, updatedAt: timestamp });
+        }
       });
   }
 }

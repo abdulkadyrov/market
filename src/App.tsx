@@ -30,6 +30,7 @@ import {
 import { db } from "./db";
 import {
   applyDiscount,
+  calculatePriceDiscount,
   calculateWriteOffQuantity,
   clearDiscount,
   createEmptySaleEditor,
@@ -48,6 +49,7 @@ import "./styles.css";
 import type {
   AppSettings,
   BaseField,
+  BazaarLocation,
   DiscountType,
   Expense,
   Product,
@@ -61,7 +63,14 @@ import type {
   Unit,
   WriteOff
 } from "./types";
-import { bazaarCities, DEFAULT_PROFILE_ID, profileLocationLabel } from "./profiles";
+import {
+  bazaarCities,
+  bazaarLocationLabel,
+  createDefaultBazaarLocations,
+  createDefaultProfile,
+  DEFAULT_PROFILE_ID,
+  profileLocationLabel
+} from "./profiles";
 import {
   downloadTextFile,
   evaluateExpression,
@@ -125,6 +134,9 @@ interface CartLine {
   differenceAmount: number;
   quantity: number;
   salePrice: number;
+  originalSalePrice: number;
+  priceDiscountAmount: number;
+  isDiscounted: boolean;
   totalAmount: number;
   originalTotalAmount: number;
   discountType?: DiscountType;
@@ -171,6 +183,7 @@ interface WriteOffDraft {
 interface ExpenseDraft extends Expense {}
 
 interface ProfileDraft extends StoreProfile {}
+interface BazaarLocationDraft extends BazaarLocation {}
 
 const screens: Array<{ id: Screen; label: string; icon: typeof ShoppingBasket }> = [
   { id: "sale", label: "Продажа", icon: ShoppingBasket },
@@ -249,9 +262,20 @@ const emptyExpenseDraft = (profileId: string): ExpenseDraft => ({
   updatedAt: nowIso()
 });
 
-const emptyProfileDraft = (): ProfileDraft => ({
+const emptyProfileDraft = (location?: BazaarLocation): ProfileDraft => ({
   id: makeId("profile"),
+  bazaarLocationId: location?.id ?? "",
   name: "",
+  city: location?.city ?? "",
+  marketName: location?.marketName ?? "",
+  pointName: location?.pointName ?? "",
+  isArchived: false,
+  createdAt: nowIso(),
+  updatedAt: nowIso()
+});
+
+const emptyBazaarLocationDraft = (): BazaarLocationDraft => ({
+  id: makeId("bazaar"),
   city: "Махачкала",
   marketName: "",
   pointName: "",
@@ -284,6 +308,8 @@ function App() {
   const [writeOffDraft, setWriteOffDraft] = useState<WriteOffDraft | null>(null);
   const [expenseDraft, setExpenseDraft] = useState<ExpenseDraft | null>(null);
   const [profileDraft, setProfileDraft] = useState<ProfileDraft | null>(null);
+  const [bazaarLocationDraft, setBazaarLocationDraft] = useState<BazaarLocationDraft | null>(null);
+  const [modePickerOpen, setModePickerOpen] = useState(false);
   const [historyRange, setHistoryRange] = useState<"today" | "7d" | "30d" | "all">("today");
   const [analyticsRange, setAnalyticsRange] = useState<"today" | "7d" | "30d" | "all">("today");
   const [productQuery, setProductQuery] = useState("");
@@ -293,6 +319,7 @@ function App() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const saleCheckoutRef = useRef<HTMLDivElement | null>(null);
 
+  const bazaarLocations = useLiveQuery(() => db.bazaarLocations.orderBy("marketName").toArray(), [], []) ?? [];
   const storeProfiles = useLiveQuery(() => db.storeProfiles.orderBy("name").toArray(), [], []) ?? [];
   const allStockGroups = useLiveQuery(() => db.stockGroups.toArray(), [], []) ?? [];
   const allProducts = useLiveQuery(() => db.products.orderBy("updatedAt").toArray(), [], []) ?? [];
@@ -354,12 +381,15 @@ function App() {
     setReceivedAmountState(0);
     setKeypad(null);
     setToolPanel(null);
+    setModePickerOpen(false);
     setSelectedCategory("Все");
     setProductDraft(null);
     setGroupDraft(null);
     setReceiptDraft(null);
     setWriteOffDraft(null);
     setExpenseDraft(null);
+    setProfileDraft(null);
+    setBazaarLocationDraft(null);
   }, [activeProfileId]);
 
   useEffect(() => {
@@ -443,7 +473,7 @@ function App() {
         date: item.date,
         title: productViewMap.get(item.productId)?.displayName ?? "Продажа",
         amount: item.finalTotalAmount,
-        subtext: `${formatQuantity(item.quantity, productMap.get(item.productId)?.unit ?? "kg", settings.weightPrecision)} · запрос ${formatMoney(item.requestedAmount ?? item.finalTotalAmount)} ₽ · разница ${formatSignedMoney(item.differenceAmount ?? item.finalTotalAmount - (item.requestedAmount ?? item.finalTotalAmount))}`
+        subtext: `${formatQuantity(item.quantity, productMap.get(item.productId)?.unit ?? "kg", settings.weightPrecision)} · запрос ${formatMoney(item.requestedAmount ?? item.finalTotalAmount)} ₽ · разница ${formatSignedMoney(item.differenceAmount ?? item.finalTotalAmount - (item.requestedAmount ?? item.finalTotalAmount))}${item.isDiscounted ? " · скидочная" : ""}`
       })),
       ...receipts.map((item) => ({
         id: item.id,
@@ -562,6 +592,7 @@ function App() {
       adjustedSalesCount: periodSales.filter(
         (item) => Math.abs(item.differenceAmount ?? item.finalTotalAmount - (item.requestedAmount ?? item.finalTotalAmount)) > 0.001
       ).length,
+      discountedSalesCount: periodSales.filter((item) => item.isDiscounted).length,
       purchase,
       expenses: expensesTotal,
       writeOffs: writeOffTotal,
@@ -598,6 +629,7 @@ function App() {
       `По запросам: ${formatMoney(report.requestedRevenue)} ₽`,
       `Фактически: ${formatMoney(report.revenue)} ₽`,
       `Разница: ${formatSignedMoney(report.differenceRevenue)}`,
+      `Скидочных продаж: ${report.discountedSalesCount}`,
       `Расходы: ${formatMoney(report.expenses)} ₽`,
       `Порча: ${formatMoney(report.writeOffs)} ₽`,
       `Прибыль: ${formatMoney(report.profit)} ₽`
@@ -655,6 +687,15 @@ function App() {
           ? reservedStockByGroup.get(selectedProduct.stockGroupId) ?? 0
           : reservedStockByProduct.get(selectedProduct.id) ?? 0)
     : 0;
+
+  const currentOriginalSalePrice = selectedProduct?.defaultSalePrice ?? saleEditor.salePrice;
+  const currentPriceDiscountAmount = calculatePriceDiscount(
+    currentOriginalSalePrice,
+    saleEditor.salePrice,
+    saleEditor.quantity
+  );
+  const currentPriceChanged = Math.abs(saleEditor.salePrice - currentOriginalSalePrice) > 0.001;
+  const currentIsDiscounted = currentPriceDiscountAmount > 0 || Boolean(saleEditor.discountAmount);
 
   const checkoutCurrentIncluded = currentLineValid ? saleEditor.finalTotalAmount : 0;
   const checkoutTotal = useMemo(
@@ -721,8 +762,20 @@ function App() {
     }
     setSelectedProductId(productId);
     resetSale(product);
-    if (window.matchMedia("(max-width: 899px)").matches) {
-      window.requestAnimationFrame(() => saleCheckoutRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
+    setModePickerOpen(true);
+  };
+
+  const chooseSaleMode = (mode: SaleMode) => {
+    setModePickerOpen(false);
+    if (mode === "by_weight") {
+      openKeypad(
+        "quantity",
+        isPieceSelected ? "Сколько штук просит клиент" : "Сколько кг просит клиент",
+        saleEditor.requestedQuantity ?? "",
+        unitLabel(selectedUnit)
+      );
+    } else {
+      openKeypad("totalAmount", "На какую сумму просит клиент", saleEditor.requestedAmount, "₽");
     }
   };
 
@@ -808,6 +861,11 @@ function App() {
     if (keypad.field === "salePrice") {
       setSaleEditor((current) => editSelectedPrice(current, value));
       setToolPanel(null);
+      if (selectedProduct && value < selectedProduct.defaultSalePrice) {
+        showToast("Цена снижена — продажа отмечена скидочной");
+      } else if (selectedProduct && Math.abs(value - selectedProduct.defaultSalePrice) > 0.001) {
+        showToast("Цена продажи изменена");
+      }
     }
 
     if (keypad.field === "discountAmount") {
@@ -912,6 +970,9 @@ function App() {
         differenceAmount: saleEditor.differenceAmount,
         quantity: saleEditor.quantity,
         salePrice: saleEditor.salePrice,
+        originalSalePrice: currentOriginalSalePrice,
+        priceDiscountAmount: currentPriceDiscountAmount,
+        isDiscounted: currentIsDiscounted,
         totalAmount: saleEditor.totalAmount,
         originalTotalAmount: saleEditor.discountAmount ? saleEditor.originalTotalAmount : saleEditor.totalAmount,
         discountType: saleEditor.discountType,
@@ -968,6 +1029,9 @@ function App() {
         differenceAmount: saleEditor.differenceAmount,
         quantity: saleEditor.quantity,
         salePrice: saleEditor.salePrice,
+        originalSalePrice: currentOriginalSalePrice,
+        priceDiscountAmount: currentPriceDiscountAmount,
+        isDiscounted: currentIsDiscounted,
         totalAmount: saleEditor.totalAmount,
         originalTotalAmount: saleEditor.discountAmount ? saleEditor.originalTotalAmount : saleEditor.totalAmount,
         discountType: saleEditor.discountType,
@@ -1062,6 +1126,9 @@ function App() {
             differenceAmount: line.differenceAmount,
             quantity: line.quantity,
             salePrice: line.salePrice,
+            originalSalePrice: line.originalSalePrice,
+            priceDiscountAmount: line.priceDiscountAmount || undefined,
+            isDiscounted: line.isDiscounted,
             totalAmount: line.totalAmount,
             originalTotalAmount: line.originalTotalAmount,
             discountType: line.discountType,
@@ -1500,16 +1567,8 @@ function App() {
     await db.transaction("rw", db.tables, async () => {
       await Promise.all(db.tables.map((table) => table.clear()));
       const timestamp = nowIso();
-      await db.storeProfiles.put({
-        id: DEFAULT_PROFILE_ID,
-        name: "Газель №1",
-        city: "Махачкала",
-        marketName: "Восточный базар",
-        pointName: "Точка 12",
-        isArchived: false,
-        createdAt: timestamp,
-        updatedAt: timestamp
-      });
+      await db.bazaarLocations.bulkPut(createDefaultBazaarLocations(timestamp));
+      await db.storeProfiles.put(createDefaultProfile(timestamp));
       await db.appSettings.put({ ...defaultSettings, activeProfileId: DEFAULT_PROFILE_ID, updatedAt: timestamp });
     });
     resetEntireCheckout(undefined);
@@ -1542,17 +1601,21 @@ function App() {
     if (!profileDraft) {
       return;
     }
-    if (!profileDraft.name.trim() || !profileDraft.city.trim() || !profileDraft.marketName.trim()) {
-      showToast("Заполните название газели, город и базар");
+    const location = bazaarLocations.find(
+      (item) => item.id === profileDraft.bazaarLocationId && !item.isArchived
+    );
+    if (!profileDraft.name.trim() || !location) {
+      showToast("Введите название и выберите сохраненный базар");
       return;
     }
     const isNew = !storeProfiles.some((profile) => profile.id === profileDraft.id);
     await db.storeProfiles.put({
       ...profileDraft,
       name: profileDraft.name.trim(),
-      city: profileDraft.city.trim(),
-      marketName: profileDraft.marketName.trim(),
-      pointName: profileDraft.pointName.trim(),
+      bazaarLocationId: location.id,
+      city: location.city,
+      marketName: location.marketName,
+      pointName: location.pointName,
       updatedAt: nowIso()
     });
     setProfileDraft(null);
@@ -1560,6 +1623,39 @@ function App() {
       await saveSettings({ activeProfileId: profileDraft.id });
     }
     showToast(isNew ? "Профиль газели создан" : "Профиль обновлен");
+  };
+
+  const saveBazaarLocation = async () => {
+    if (!bazaarLocationDraft) {
+      return;
+    }
+    if (!bazaarLocationDraft.city.trim() || !bazaarLocationDraft.marketName.trim()) {
+      showToast("Заполните город и название базара");
+      return;
+    }
+    const timestamp = nowIso();
+    const location: BazaarLocation = {
+      ...bazaarLocationDraft,
+      city: bazaarLocationDraft.city.trim(),
+      marketName: bazaarLocationDraft.marketName.trim(),
+      pointName: bazaarLocationDraft.pointName.trim(),
+      updatedAt: timestamp
+    };
+    await db.transaction("rw", db.bazaarLocations, db.storeProfiles, async () => {
+      await db.bazaarLocations.put(location);
+      const linkedProfiles = await db.storeProfiles.where("bazaarLocationId").equals(location.id).toArray();
+      await db.storeProfiles.bulkPut(
+        linkedProfiles.map((profile) => ({
+          ...profile,
+          city: location.city,
+          marketName: location.marketName,
+          pointName: location.pointName,
+          updatedAt: timestamp
+        }))
+      );
+    });
+    setBazaarLocationDraft(null);
+    showToast("Базар сохранен");
   };
 
   const addQuickPreset = async (type: "weight" | "amount", rawValue: string) => {
@@ -1799,6 +1895,16 @@ function App() {
                 ) : null}
               </div>
 
+              {currentPriceChanged ? (
+                <div className={`price-status ${currentPriceDiscountAmount > 0 ? "discounted" : "changed"}`}>
+                  <strong>{currentPriceDiscountAmount > 0 ? "Скидочная цена" : "Цена изменена"}</strong>
+                  <span>
+                    Было {formatMoney(currentOriginalSalePrice)} ₽/{unitLabel(selectedUnit)}
+                    {currentPriceDiscountAmount > 0 ? ` · скидка по цене ${formatMoney(currentPriceDiscountAmount)} ₽` : ""}
+                  </span>
+                </div>
+              ) : null}
+
               <div className="quick-actions">
                 <ActionButton onClick={() => setToolPanel((current) => (current === "discount" ? null : "discount"))}>Скидка</ActionButton>
                 <ActionButton onClick={() => setToolPanel((current) => (current === "change" ? null : "change"))}>Оплата и сдача</ActionButton>
@@ -1875,7 +1981,7 @@ function App() {
                         key={line.id}
                         title={line.productName}
                         subtitle={`${formatQuantity(line.quantity, line.unit, settings.weightPrecision)} × ${formatMoney(line.salePrice)} ₽`}
-                        meta={`Запрос ${formatMoney(line.requestedAmount)} ₽ · разница ${formatSignedMoney(line.differenceAmount)}${line.discountAmount ? ` · скидка ${formatMoney(line.discountAmount)} ₽` : ""}`}
+                        meta={`Запрос ${formatMoney(line.requestedAmount)} ₽ · разница ${formatSignedMoney(line.differenceAmount)}${line.priceDiscountAmount ? ` · скидочная цена ${formatMoney(line.priceDiscountAmount)} ₽` : ""}${line.discountAmount ? ` · скидка ${formatMoney(line.discountAmount)} ₽` : ""}`}
                         side={`${formatMoney(line.finalTotalAmount)} ₽`}
                         actions={
                           <button className="ghost-button danger" type="button" onClick={() => removeCartLine(line.id)}>
@@ -2430,6 +2536,7 @@ function App() {
                   label={`Разница · ${formatCountWithNoun(report.adjustedSalesCount, ["продажа", "продажи", "продаж"])}`}
                   value={formatSignedMoney(report.differenceRevenue)}
                 />
+                <StatCard icon={<Wallet size={20} />} label="Скидочные продажи" value={String(report.discountedSalesCount)} />
                 <StatCard icon={<Receipt size={20} />} label="Закупка" value={`${formatMoney(report.purchase)} ₽`} />
                 <StatCard icon={<Boxes size={20} />} label="Себестоимость продаж" value={`${formatMoney(report.cogs)} ₽`} />
                 <StatCard icon={<ClipboardList size={20} />} label="Расходы" value={`${formatMoney(report.expenses)} ₽`} />
@@ -2520,10 +2627,52 @@ function App() {
             <Section>
               <div className="section-header">
                 <div>
+                  <div className="eyebrow">Сохраните один раз</div>
+                  <h2>Базары и места</h2>
+                </div>
+                <button className="primary-button" type="button" onClick={() => setBazaarLocationDraft(emptyBazaarLocationDraft())}>
+                  <Plus size={18} /> Место
+                </button>
+              </div>
+              {bazaarLocationDraft && (
+                <EditorCard title="Базар / торговое место" onCancel={() => setBazaarLocationDraft(null)} onSave={() => void saveBazaarLocation()}>
+                  <Field label="Город">
+                    <input list="bazaar-city-options" value={bazaarLocationDraft.city} onChange={(event) => setBazaarLocationDraft({ ...bazaarLocationDraft, city: event.target.value })} />
+                    <datalist id="bazaar-city-options">
+                      {bazaarCities.map((city) => <option key={city} value={city} />)}
+                    </datalist>
+                  </Field>
+                  <Field label="Название базара">
+                    <input value={bazaarLocationDraft.marketName} placeholder="Например, Восточный базар" onChange={(event) => setBazaarLocationDraft({ ...bazaarLocationDraft, marketName: event.target.value })} />
+                  </Field>
+                  <Field label="Точка / ряд">
+                    <input value={bazaarLocationDraft.pointName} placeholder="Например, Ряд 4 · точка 7" onChange={(event) => setBazaarLocationDraft({ ...bazaarLocationDraft, pointName: event.target.value })} />
+                  </Field>
+                </EditorCard>
+              )}
+              <div className="profile-card-grid">
+                {bazaarLocations.filter((location) => !location.isArchived).map((location) => (
+                  <article key={location.id} className="profile-card location-card">
+                    <div className="profile-card-icon"><MapPin size={22} /></div>
+                    <div className="profile-card-copy">
+                      <h3>{location.marketName}</h3>
+                      <p>{bazaarLocationLabel(location)}</p>
+                    </div>
+                    <div className="card-actions">
+                      <button className="ghost-button compact-button" type="button" onClick={() => setBazaarLocationDraft({ ...location })}>Изменить</button>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            </Section>
+
+            <Section>
+              <div className="section-header">
+                <div>
                   <div className="eyebrow">Отдельные каталоги и отчеты</div>
                   <h2>Профили газелей</h2>
                 </div>
-                <button className="primary-button" type="button" onClick={() => setProfileDraft(emptyProfileDraft())}>
+                <button className="primary-button" type="button" onClick={() => setProfileDraft(emptyProfileDraft(bazaarLocations.find((location) => !location.isArchived)))}>
                   <Plus size={18} /> Профиль
                 </button>
               </div>
@@ -2532,18 +2681,29 @@ function App() {
                   <Field label="Название профиля / газели">
                     <input value={profileDraft.name} placeholder="Например, Газель №3" onChange={(event) => setProfileDraft({ ...profileDraft, name: event.target.value })} />
                   </Field>
-                  <Field label="Город базара">
-                    <input list="bazaar-city-options" value={profileDraft.city} onChange={(event) => setProfileDraft({ ...profileDraft, city: event.target.value })} />
-                    <datalist id="bazaar-city-options">
-                      {bazaarCities.map((city) => <option key={city} value={city} />)}
-                    </datalist>
+                  <Field label="Сохраненный базар / место">
+                    <select
+                      value={profileDraft.bazaarLocationId}
+                      onChange={(event) => {
+                        const location = bazaarLocations.find((item) => item.id === event.target.value);
+                        if (location) {
+                          setProfileDraft({
+                            ...profileDraft,
+                            bazaarLocationId: location.id,
+                            city: location.city,
+                            marketName: location.marketName,
+                            pointName: location.pointName
+                          });
+                        }
+                      }}
+                    >
+                      <option value="">Выберите место</option>
+                      {bazaarLocations.filter((location) => !location.isArchived).map((location) => (
+                        <option key={location.id} value={location.id}>{bazaarLocationLabel(location)}</option>
+                      ))}
+                    </select>
                   </Field>
-                  <Field label="Название базара">
-                    <input value={profileDraft.marketName} placeholder="Например, Восточный базар" onChange={(event) => setProfileDraft({ ...profileDraft, marketName: event.target.value })} />
-                  </Field>
-                  <Field label="Точка / ряд">
-                    <input value={profileDraft.pointName} placeholder="Например, Ряд 4 · точка 7" onChange={(event) => setProfileDraft({ ...profileDraft, pointName: event.target.value })} />
-                  </Field>
+                  {bazaarLocations.length === 0 ? <p className="muted">Сначала добавьте базар выше.</p> : null}
                 </EditorCard>
               )}
               <div className="profile-card-grid">
@@ -2811,6 +2971,42 @@ function App() {
           </>
         )}
       </main>
+
+      {modePickerOpen && selectedProduct ? (
+        <div
+          className="mode-picker-backdrop"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) {
+              setModePickerOpen(false);
+            }
+          }}
+        >
+          <section className="mode-picker-dialog" role="dialog" aria-modal="true" aria-labelledby="sale-mode-title">
+            <button className="mode-picker-close" type="button" aria-label="Закрыть" onClick={() => setModePickerOpen(false)}>
+              <X size={20} />
+            </button>
+            <div className="mode-picker-product">
+              <span className="mode-picker-emoji" aria-hidden="true">{productEmoji(selectedProduct.displayName)}</span>
+              <div>
+                <div className="eyebrow">Выбран товар</div>
+                <h2 id="sale-mode-title">{selectedProduct.displayName}</h2>
+                <p>{formatMoney(selectedProduct.defaultSalePrice)} ₽/{unitLabel(selectedProduct.unit)}</p>
+              </div>
+            </div>
+            <div className="mode-picker-actions">
+              <button className="mode-picker-option" type="button" onClick={() => chooseSaleMode("by_weight")}>
+                <span>{isPieceSelected ? "ПО КОЛИЧЕСТВУ" : "ПО ВЕСУ"}</span>
+                <strong>{isPieceSelected ? "Ввести шт" : "Ввести кг"}</strong>
+              </button>
+              <button className="mode-picker-option" type="button" onClick={() => chooseSaleMode("by_amount")}>
+                <span>НА СУММУ</span>
+                <strong>Ввести ₽</strong>
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
 
       <nav className="bottom-nav">
         <div className="nav-brand">

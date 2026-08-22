@@ -1,6 +1,7 @@
 import { db } from "./db";
 import type {
   AppSettings,
+  BazaarLocation,
   Expense,
   Product,
   QuickButtonSetting,
@@ -11,18 +12,25 @@ import type {
   WriteOff
 } from "./types";
 import { nowIso } from "./utils";
-import { createDefaultProfile, DEFAULT_PROFILE_ID } from "./profiles";
+import {
+  createDefaultBazaarLocations,
+  createDefaultProfile,
+  DEFAULT_PROFILE_ID,
+  SECOND_BAZAAR_LOCATION_ID
+} from "./profiles";
 
 const initializedKey = "market-db-initialized";
 const demoRequestedKey = "market-db-demo-requested";
 
 const timestamp = nowIso();
 const secondProfileId = "profile_gazelle_2";
+const bazaarLocations: BazaarLocation[] = createDefaultBazaarLocations(timestamp);
 
 const storeProfiles: StoreProfile[] = [
   createDefaultProfile(timestamp),
   {
     id: secondProfileId,
+    bazaarLocationId: SECOND_BAZAAR_LOCATION_ID,
     name: "Газель №2",
     city: "Астрахань",
     marketName: "Большие Исады",
@@ -473,6 +481,7 @@ const seedDatabaseOnce = async () => {
   }
 
   await db.transaction("rw", db.tables, async () => {
+    await db.bazaarLocations.bulkPut(bazaarLocations);
     await db.storeProfiles.bulkPut(storeProfiles);
     await db.stockGroups.bulkPut(stockGroups);
     await db.products.bulkPut(products);

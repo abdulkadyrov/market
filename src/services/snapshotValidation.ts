@@ -1,9 +1,15 @@
 import type { AppSnapshot } from "../types";
-import { createDefaultProfile, DEFAULT_PROFILE_ID } from "../profiles";
+import {
+  createDefaultBazaarLocations,
+  createDefaultProfile,
+  DEFAULT_BAZAAR_LOCATION_ID,
+  DEFAULT_PROFILE_ID
+} from "../profiles";
 
 type JsonRecord = Record<string, unknown>;
 
 const collections = [
+  "bazaarLocations",
   "storeProfiles",
   "stockGroups",
   "products",
@@ -129,7 +135,7 @@ export const parseSnapshot = (value: unknown): AppSnapshot => {
     fail("файл", "ожидался JSON-объект");
   }
   const inputRoot = value as JsonRecord;
-  if (inputRoot.schemaVersion !== undefined && (typeof inputRoot.schemaVersion !== "number" || inputRoot.schemaVersion > 3)) {
+  if (inputRoot.schemaVersion !== undefined && (typeof inputRoot.schemaVersion !== "number" || inputRoot.schemaVersion > 4)) {
     fail("schemaVersion", "версия файла новее поддерживаемой");
   }
   const root = normalizeLegacySnapshot(inputRoot);
@@ -144,9 +150,22 @@ export const parseSnapshot = (value: unknown): AppSnapshot => {
     Set<string>
   >;
 
+  rows.bazaarLocations.forEach((row, index) => {
+    const path = `bazaarLocations[${index}]`;
+    validateCommon(row, path);
+    requireString(row, "city", path, false);
+    requireString(row, "marketName", path, false);
+    requireString(row, "pointName", path);
+    requireBoolean(row, "isArchived", path);
+  });
+
   rows.storeProfiles.forEach((row, index) => {
     const path = `storeProfiles[${index}]`;
     validateCommon(row, path);
+    const bazaarLocationId = requireString(row, "bazaarLocationId", path, false);
+    if (!ids.bazaarLocations.has(bazaarLocationId)) {
+      fail(`${path}.bazaarLocationId`, "базар или место не найдено");
+    }
     requireString(row, "name", path, false);
     requireString(row, "city", path, false);
     requireString(row, "marketName", path, false);
@@ -240,6 +259,9 @@ export const parseSnapshot = (value: unknown): AppSnapshot => {
     optionalSignedNumber(row, "differenceAmount", path);
     requireNumber(row, "quantity", path, { positive: true });
     requireNumber(row, "salePrice", path, { positive: true });
+    optionalNumber(row, "originalSalePrice", path);
+    optionalNumber(row, "priceDiscountAmount", path);
+    optionalBoolean(row, "isDiscounted", path);
     requireNumber(row, "totalAmount", path);
     requireNumber(row, "originalTotalAmount", path);
     optionalString(row, "discountType", path);
@@ -309,8 +331,9 @@ export const parseSnapshot = (value: unknown): AppSnapshot => {
   });
 
   return {
-    schemaVersion: 3,
+    schemaVersion: 4,
     exportedAt: typeof root.exportedAt === "string" ? root.exportedAt : new Date().toISOString(),
+    bazaarLocations: rows.bazaarLocations,
     storeProfiles: rows.storeProfiles,
     stockGroups: rows.stockGroups,
     products: rows.products,
@@ -325,34 +348,61 @@ export const parseSnapshot = (value: unknown): AppSnapshot => {
 
 function normalizeLegacySnapshot(root: JsonRecord): JsonRecord {
   const version = typeof root.schemaVersion === "number" ? root.schemaVersion : 1;
-  if (version >= 3) {
+  if (version >= 4) {
     return root;
   }
 
   const timestamp = typeof root.exportedAt === "string" ? root.exportedAt : new Date().toISOString();
   const tenantCollections = ["stockGroups", "products", "receipts", "sales", "expenses", "writeOffs"];
-  const migrated: JsonRecord = {
-    ...root,
-    schemaVersion: 3,
-    storeProfiles: [createDefaultProfile(timestamp)]
-  };
+  const migrated: JsonRecord = { ...root };
 
-  for (const collection of tenantCollections) {
-    if (!Array.isArray(root[collection])) {
-      continue;
+  if (version < 3) {
+    migrated.storeProfiles = [createDefaultProfile(timestamp)];
+
+    for (const collection of tenantCollections) {
+      if (!Array.isArray(root[collection])) {
+        continue;
+      }
+      const rows = root[collection] as unknown[];
+      migrated[collection] = rows.map((row) =>
+        isRecord(row) ? { ...row, profileId: typeof row.profileId === "string" ? row.profileId : DEFAULT_PROFILE_ID } : row
+      );
     }
-    const rows = root[collection] as unknown[];
-    migrated[collection] = rows.map((row) =>
-      isRecord(row) ? { ...row, profileId: typeof row.profileId === "string" ? row.profileId : DEFAULT_PROFILE_ID } : row
+
+    const settingsRows = Array.isArray(root.appSettings) ? (root.appSettings as unknown[]) : [];
+    migrated.appSettings = settingsRows.map((row) =>
+      isRecord(row)
+        ? { ...row, activeProfileId: typeof row.activeProfileId === "string" ? row.activeProfileId : DEFAULT_PROFILE_ID }
+        : row
     );
   }
 
-  const settingsRows = Array.isArray(root.appSettings) ? (root.appSettings as unknown[]) : [];
-  migrated.appSettings = settingsRows.map((row) =>
-    isRecord(row)
-      ? { ...row, activeProfileId: typeof row.activeProfileId === "string" ? row.activeProfileId : DEFAULT_PROFILE_ID }
-      : row
-  );
+  const profileRows = Array.isArray(migrated.storeProfiles) ? (migrated.storeProfiles as unknown[]) : [];
+  const locations: JsonRecord[] = [];
+  const locationIdByKey = new Map<string, string>();
+  migrated.storeProfiles = profileRows.map((row, index) => {
+    if (!isRecord(row)) {
+      return row;
+    }
+    const key = [row.city, row.marketName, row.pointName].join("|").toLocaleLowerCase("ru");
+    let locationId = locationIdByKey.get(key);
+    if (!locationId) {
+      locationId = index === 0 ? DEFAULT_BAZAAR_LOCATION_ID : `bazaar_${String(row.id || index)}`;
+      locationIdByKey.set(key, locationId);
+      locations.push({
+        id: locationId,
+        city: typeof row.city === "string" ? row.city : "Махачкала",
+        marketName: typeof row.marketName === "string" ? row.marketName : "Базар",
+        pointName: typeof row.pointName === "string" ? row.pointName : "",
+        isArchived: false,
+        createdAt: typeof row.createdAt === "string" ? row.createdAt : timestamp,
+        updatedAt: typeof row.updatedAt === "string" ? row.updatedAt : timestamp
+      });
+    }
+    return { ...row, bazaarLocationId: locationId };
+  });
+  migrated.bazaarLocations = locations.length > 0 ? locations : createDefaultBazaarLocations(timestamp).slice(0, 1);
+  migrated.schemaVersion = 4;
   return migrated;
 }
 

@@ -199,6 +199,9 @@ export const editPrice = (editor: SaleEditor, salePrice: number, precision: numb
 export const setReceivedAmount = (editor: SaleEditor, receivedAmount: number, precision: number) =>
   recalcSaleEditor(editor, { receivedAmount: Math.max(0, receivedAmount) }, precision);
 
+export const calculatePriceDiscount = (originalPrice: number, salePrice: number, quantity: number) =>
+  toMoney(Math.max(0, originalPrice - salePrice) * Math.max(0, quantity));
+
 export const calculateWriteOffQuantity = (
   inputMode: "weight" | "packages",
   quantity: number,

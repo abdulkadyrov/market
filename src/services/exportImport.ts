@@ -3,8 +3,9 @@ import type { AppSnapshot } from "../types";
 import { parseSnapshot } from "./snapshotValidation";
 
 export const exportSnapshot = async (): Promise<AppSnapshot> => ({
-  schemaVersion: 3,
+  schemaVersion: 4,
   exportedAt: new Date().toISOString(),
+  bazaarLocations: await db.bazaarLocations.toArray(),
   storeProfiles: await db.storeProfiles.toArray(),
   stockGroups: await db.stockGroups.toArray(),
   products: await db.products.toArray(),
@@ -21,6 +22,7 @@ export const importSnapshot = async (input: unknown) => {
 
   await db.transaction("rw", db.tables, async () => {
     await Promise.all(db.tables.map((table) => table.clear()));
+    await db.bazaarLocations.bulkPut(snapshot.bazaarLocations);
     await db.storeProfiles.bulkPut(snapshot.storeProfiles);
     await db.stockGroups.bulkPut(snapshot.stockGroups);
     await db.products.bulkPut(snapshot.products);

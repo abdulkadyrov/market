@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   applyDiscount,
+  calculatePriceDiscount,
   calculateWriteOffQuantity,
   createEmptySaleEditor,
   editActualTotal,
@@ -30,6 +31,11 @@ const product: ProductView = {
 };
 
 describe("расчет продажи", () => {
+  it("помечает снижение ручной цены как скидку по цене", () => {
+    expect(calculatePriceDiscount(55, 50, 2)).toBe(10);
+    expect(calculatePriceDiscount(55, 60, 2)).toBe(0);
+  });
+
   it("считает сумму по введенному весу", () => {
     const result = editWeight(createEmptySaleEditor(product), 2.35, 2);
 
