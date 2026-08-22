@@ -481,44 +481,92 @@ h2 {
 .number-pad {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 8px;
+}
+
+.compact-pad-params {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.compact-pad-params button {
+  min-width: 0;
+  min-height: 52px;
+  padding: 7px 9px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 2px;
+  border: 1px solid transparent;
+  border-radius: 15px;
+  background: #f3f3f7;
+  color: var(--text);
+  text-align: left;
+}
+
+.compact-pad-params button.active {
+  border-color: var(--primary);
+  background: #ece8ff;
+  color: var(--primary-strong);
+}
+
+.compact-pad-params span {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.compact-pad-params strong {
+  width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
 }
 
 .pad-display {
-  min-height: 84px;
-  border-radius: 22px;
+  min-height: 70px;
+  border-radius: 19px;
   background: var(--surface-muted);
-  padding: 18px;
-  font-size: 36px;
-  font-weight: 700;
+  padding: 12px 16px;
+  display: flex;
+  align-items: baseline;
+  justify-content: flex-end;
+  gap: 9px;
+  overflow: hidden;
+}
+
+.pad-display strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 38px;
+  line-height: 1;
+}
+
+.pad-display span {
+  color: var(--primary-strong);
+  font-size: 24px;
+  font-weight: 800;
 }
 
 .pad-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 10px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
 }
 
 .pad-key {
-  min-height: 72px;
+  min-height: 52px;
   background: var(--surface-muted);
   color: var(--text);
-  font-size: 26px;
+  font-size: 24px;
   font-weight: 700;
 }
 
 .pad-key.utility {
   font-size: 22px;
-}
-
-.pad-key.confirm {
-  background: var(--accent);
-  color: #fff;
-}
-
-.pad-key.operator {
-  background: #ebe7ff;
-  color: var(--primary-strong);
 }
 
 .floating-pad-backdrop {
@@ -527,56 +575,80 @@ h2 {
   z-index: 10;
   background: rgba(27, 19, 8, 0.32);
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   justify-content: center;
   padding: 16px 14px calc(14px + env(safe-area-inset-bottom));
 }
 
 .number-pad.floating {
-  width: min(100%, 720px);
-  max-height: 88vh;
-  overflow: auto;
-  border-bottom-left-radius: 18px;
-  border-bottom-right-radius: 18px;
-}
-
-.pad-live-summary {
-  display: grid;
-  gap: 8px;
-  background: var(--surface-muted);
-  border-radius: 22px;
+  width: min(100%, 420px);
+  max-height: none;
+  overflow: hidden;
   padding: 14px;
+  border-radius: 28px;
+  box-shadow: 0 28px 80px rgba(30, 24, 67, 0.24);
 }
 
-.pad-live-row {
+.compact-pad-header,
+.compact-pad-actions {
   display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.compact-pad-header {
+  min-height: 38px;
   justify-content: space-between;
-  gap: 12px;
-  align-items: baseline;
 }
 
-.pad-live-row.emphasis strong,
-.pad-live-row.total strong {
-  font-size: 28px;
+.compact-pad-header h3 {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 18px;
 }
 
-.pad-live-row.total {
-  padding-top: 8px;
-  border-top: 1px solid rgba(111, 96, 79, 0.25);
+.compact-pad-close {
+  width: 38px;
+  height: 38px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: #f0f0f5;
+  color: var(--muted);
 }
 
-.pad-live-row.danger {
-  color: #b42318;
-  padding-top: 8px;
-  border-top: 1px solid rgba(180, 35, 24, 0.25);
+.compact-pad-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 0.75fr) minmax(0, 1.25fr);
 }
 
-.pad-live-row strong {
-  text-align: right;
+.compact-pad-clear,
+.compact-pad-confirm {
+  min-height: 54px;
+  border: 0;
+  border-radius: 17px;
+  font-weight: 800;
 }
 
-.pad-key:disabled {
-  opacity: 0.45;
+.compact-pad-clear {
+  background: #f0f0f5;
+  color: var(--muted);
+}
+
+.compact-pad-confirm {
+  background: var(--primary);
+  color: #fff;
+}
+
+.compact-pad-confirm span {
+  margin-left: 4px;
+}
+
+.backspace-key {
+  color: var(--primary-strong);
 }
 
 .sell-bar {
@@ -1430,7 +1502,7 @@ h2 {
   }
 
   .number-pad.floating {
-    width: min(520px, 100%);
+    width: min(420px, 100%);
   }
 
   .stats-grid {

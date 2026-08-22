@@ -40,7 +40,6 @@ import {
   editPrice,
   editTotal,
   editWeight,
-  setReceivedAmount,
   type SaleEditor
 } from "./logic";
 import { markDatabaseInitialized, requestDemoSeed, seedDatabase } from "./seed";
@@ -770,12 +769,12 @@ function App() {
     if (mode === "by_weight") {
       openKeypad(
         "quantity",
-        isPieceSelected ? "Сколько штук просит клиент" : "Сколько кг просит клиент",
+        isPieceSelected ? "Введите количество" : "Введите вес",
         saleEditor.requestedQuantity ?? "",
         unitLabel(selectedUnit)
       );
     } else {
-      openKeypad("totalAmount", "На какую сумму просит клиент", saleEditor.requestedAmount, "₽");
+      openKeypad("totalAmount", "Введите сумму", saleEditor.requestedAmount, "₽");
     }
   };
 
@@ -785,46 +784,9 @@ function App() {
       title,
       suffix,
       value: String(value || ""),
-      submitLabel: suffix === "кг" || suffix === "шт" ? suffix : suffix === "₽" ? "₽" : "OK"
+      submitLabel: suffix || "OK"
     });
   };
-
-  const keypadPreview = useMemo(() => {
-    if (!keypad) {
-      return saleEditor;
-    }
-
-    const computed = evaluateExpression(keypad.value);
-    const value = Number.isFinite(computed) ? computed : 0;
-    const precision = settings.weightPrecision;
-
-    if (keypad.field === "quantity") {
-      return editWeight(saleEditor, isPieceSelected ? Math.max(0, Math.floor(value)) : value, precision);
-    }
-    if (keypad.field === "totalAmount") {
-      return isPieceSelected ? editPieceAmount(saleEditor, value, precision) : editTotal(saleEditor, value, precision);
-    }
-    if (keypad.field === "actualAmount") {
-      return editActualTotal(saleEditor, value, precision);
-    }
-    if (keypad.field === "salePrice") {
-      const repriced = editPrice(saleEditor, value, precision);
-      return isPieceSelected && repriced.mode === "by_amount" && repriced.requestedAmount > 0
-        ? editPieceAmount(repriced, repriced.requestedAmount, precision)
-        : repriced;
-    }
-    if (keypad.field === "discountAmount") {
-      return applyDiscount(saleEditor, "amount", value, precision);
-    }
-    if (keypad.field === "discountPercent") {
-      return applyDiscount(saleEditor, "percent", value, precision);
-    }
-    if (keypad.field === "receivedAmount") {
-      return setReceivedAmount(saleEditor, value, precision);
-    }
-
-    return saleEditor;
-  }, [isPieceSelected, keypad, saleEditor, settings.weightPrecision]);
 
   const submitKeypad = () => {
     if (!keypad) {
@@ -1815,7 +1777,8 @@ function App() {
                 <button
                   className="price-badge"
                   type="button"
-                  onClick={() => openKeypad("salePrice", `Цена за ${unitLabel(selectedUnit)}`, saleEditor.salePrice, "₽")}
+                  title="Изменить цену только для этого клиента"
+                  onClick={() => openKeypad("salePrice", "Цена для клиента", saleEditor.salePrice, "₽")}
                 >
                   <span>ЦЕНА</span>
                   <strong>{formatMoney(saleEditor.salePrice)} ₽/{unitLabel(selectedUnit)}</strong>
@@ -1827,7 +1790,7 @@ function App() {
                   <button
                     className={`mode-tile ${saleEditor.mode === "by_weight" ? "active" : ""}`}
                     type="button"
-                    onClick={() => openKeypad("quantity", isPieceSelected ? "Сколько штук просит клиент" : "Сколько кг просит клиент", saleEditor.requestedQuantity ?? "", unitLabel(selectedUnit))}
+                    onClick={() => openKeypad("quantity", isPieceSelected ? "Введите количество" : "Введите вес", saleEditor.requestedQuantity ?? "", unitLabel(selectedUnit))}
                   >
                     <span>{isPieceSelected ? "ПО КОЛИЧЕСТВУ" : "ПО ВЕСУ"}</span>
                     <strong>{saleEditor.requestedQuantity ? formatQuantity(saleEditor.requestedQuantity, selectedUnit, settings.weightPrecision) : `Ввести ${unitLabel(selectedUnit)}`}</strong>
@@ -1844,7 +1807,7 @@ function App() {
                   <button
                     className={`mode-tile ${saleEditor.mode === "by_amount" ? "active" : ""}`}
                     type="button"
-                    onClick={() => openKeypad("totalAmount", "На какую сумму просит клиент", saleEditor.requestedAmount, "₽")}
+                    onClick={() => openKeypad("totalAmount", "Введите сумму", saleEditor.requestedAmount, "₽")}
                   >
                     <span>НА СУММУ</span>
                     <strong>{saleEditor.requestedAmount > 0 ? `${formatMoney(saleEditor.requestedAmount)} ₽` : "Ввести ₽"}</strong>
@@ -1873,7 +1836,7 @@ function App() {
                   label="Фактически получилось"
                   value={`${formatMoney(saleEditor.finalTotalAmount)} ₽`}
                   buttonLabel={isPieceSelected ? undefined : "Ввести результат"}
-                  onClick={isPieceSelected ? undefined : () => openKeypad("actualAmount", "Сколько получилось", saleEditor.finalTotalAmount, "₽")}
+                  onClick={isPieceSelected ? undefined : () => openKeypad("actualAmount", "Фактическая сумма", saleEditor.finalTotalAmount, "₽")}
                   accent="primary"
                 />
                 <MetricCard
@@ -1885,7 +1848,7 @@ function App() {
                 <MetricCard
                   label="Цена"
                   value={`${formatMoney(saleEditor.salePrice)} ₽/${unitLabel(selectedUnit)}`}
-                  onClick={() => openKeypad("salePrice", "Изменить цену", saleEditor.salePrice, "₽")}
+                  onClick={() => openKeypad("salePrice", "Цена для клиента", saleEditor.salePrice, "₽")}
                 />
                 {saleEditor.discountAmount ? (
                   <>
@@ -1942,10 +1905,10 @@ function App() {
                     </button>
                   </div>
                   <div className="panel-actions">
-                    <button className="secondary-button" type="button" onClick={() => openKeypad("discountAmount", "Скидка в рублях", saleEditor.discountValue ?? "", "₽")}>
+                    <button className="secondary-button" type="button" onClick={() => openKeypad("discountAmount", "Скидка", saleEditor.discountValue ?? "", "₽")}>
                       Ввести ₽
                     </button>
-                    <button className="secondary-button" type="button" onClick={() => openKeypad("discountPercent", "Скидка в процентах", saleEditor.discountValue ?? "", "%")}>
+                    <button className="secondary-button" type="button" onClick={() => openKeypad("discountPercent", "Скидка", saleEditor.discountValue ?? "", "%")}>
                       Ввести %
                     </button>
                     <button className="ghost-button" type="button" onClick={() => setSaleEditor((current) => clearDiscount(current, settings.weightPrecision))}>
@@ -1963,7 +1926,7 @@ function App() {
                     <MetricCard label="Сдача" value={`${formatMoney(checkoutChange)} ₽`} accent="primary" />
                   </div>
                   <div className="panel-actions">
-                    <button className="secondary-button" type="button" onClick={() => openKeypad("receivedAmount", "Получено от клиента", receivedAmount || "", "₽")}>
+                    <button className="secondary-button" type="button" onClick={() => openKeypad("receivedAmount", "Получено", receivedAmount || "", "₽")}>
                       Ввести сумму
                     </button>
                   </div>
@@ -1995,17 +1958,30 @@ function App() {
 
               <NumberPad
                 keypad={keypad}
-                preview={keypadPreview}
-                productName={selectedProduct?.displayName ?? "Нет товара"}
-                weightPrecision={settings.weightPrecision}
-                checkoutTotal={checkoutTotal}
-                receivedAmount={receivedAmount}
+                price={saleEditor.salePrice}
+                amount={saleEditor.requestedAmount}
+                quantity={saleEditor.requestedQuantity ?? saleEditor.quantity}
                 unit={selectedUnit}
+                weightPrecision={settings.weightPrecision}
                 onAppend={appendKey}
                 onBackspace={backspaceKey}
                 onClear={clearKeypad}
                 onSubmit={submitKeypad}
                 onClose={() => setKeypad(null)}
+                onSelectParameter={(field) => {
+                  if (field === "salePrice") {
+                    openKeypad("salePrice", "Цена для клиента", saleEditor.salePrice, "₽");
+                  } else if (field === "totalAmount") {
+                    openKeypad("totalAmount", "Введите сумму", saleEditor.requestedAmount, "₽");
+                  } else {
+                    openKeypad(
+                      "quantity",
+                      isPieceSelected ? "Введите количество" : "Введите вес",
+                      saleEditor.requestedQuantity ?? saleEditor.quantity,
+                      unitLabel(selectedUnit)
+                    );
+                  }
+                }}
               />
               </Section>
 
@@ -3204,32 +3180,32 @@ function EmptyState({ title, text }: { title: string; text: string }) {
 
 function NumberPad({
   keypad,
-  preview,
-  productName,
-  weightPrecision,
-  checkoutTotal,
-  receivedAmount,
+  price,
+  amount,
+  quantity,
   unit,
+  weightPrecision,
   onAppend,
   onBackspace,
   onClear,
   onSubmit,
-  onClose
+  onClose,
+  onSelectParameter
 }: {
   keypad: KeypadState | null;
-  preview: SaleEditor;
-  productName: string;
-  weightPrecision: number;
-  checkoutTotal: number;
-  receivedAmount: number;
+  price: number;
+  amount: number;
+  quantity: number;
   unit: Unit;
+  weightPrecision: number;
   onAppend: (key: string) => void;
   onBackspace: () => void;
   onClear: () => void;
   onSubmit: () => void;
   onClose: () => void;
+  onSelectParameter: (field: "salePrice" | "totalAmount" | "quantity") => void;
 }) {
-  const numberKeys = ["7", "8", "9", "/", "4", "5", "6", "*", "1", "2", "3", "-", ".", "0", "+"]; 
+  const numberKeys = ["7", "8", "9", "4", "5", "6", "1", "2", "3", ".", "0"];
 
   if (!keypad) {
     return null;
@@ -3238,73 +3214,56 @@ function NumberPad({
   return (
     <div className="floating-pad-backdrop" onClick={onClose}>
       <div className="number-pad floating" onClick={(event) => event.stopPropagation()}>
-        <div className="section-header">
-          <div>
-            <h3>{keypad.title}</h3>
-            <p>{productName}</p>
-          </div>
-          <button className="icon-button" type="button" onClick={onClose}>
+        <div className="compact-pad-header">
+          <h3>{keypad.title}</h3>
+          <button className="compact-pad-close" type="button" aria-label="Закрыть" onClick={onClose}>
             <X size={18} />
           </button>
         </div>
-        <div className="pad-live-summary">
-          <div className="pad-live-row">
+        <div className="compact-pad-params" aria-label="Параметры продажи">
+          <button
+            className={keypad.field === "salePrice" ? "active" : ""}
+            type="button"
+            onClick={() => onSelectParameter("salePrice")}
+          >
             <span>Цена</span>
-            <strong>{formatMoney(preview.salePrice)} ₽/{unitLabel(unit)}</strong>
-          </div>
-          <div className="pad-live-row emphasis">
-            <span>{unit === "piece" ? "Количество" : "Вес фактически"}</span>
-            <strong>{formatQuantity(preview.quantity, unit, weightPrecision)}</strong>
-          </div>
-          <div className="pad-live-row emphasis">
-            <span>Запрос клиента</span>
-            <strong>{formatMoney(preview.requestedAmount)} ₽</strong>
-          </div>
-          <div className="pad-live-row emphasis">
-            <span>Фактически</span>
-            <strong>{formatMoney(preview.finalTotalAmount)} ₽</strong>
-          </div>
-          <div className={`pad-live-row ${preview.differenceAmount < 0 ? "danger" : "total"}`}>
-            <span>Разница</span>
-            <strong>{formatSignedMoney(preview.differenceAmount)}</strong>
-          </div>
-          {keypad.field === "receivedAmount" ? (
-            <>
-              <div className="pad-live-row emphasis">
-                <span>Получено</span>
-                <strong>{formatMoney(Number.isFinite(evaluateExpression(keypad.value)) ? evaluateExpression(keypad.value) : receivedAmount)} ₽</strong>
-              </div>
-              <div className="pad-live-row total">
-                <span>К оплате</span>
-                <strong>{formatMoney(checkoutTotal)} ₽</strong>
-              </div>
-            </>
-          ) : null}
-          {preview.discountAmount ? (
-            <div className="pad-live-row total">
-              <span>Итого</span>
-              <strong>{formatMoney(preview.finalTotalAmount)} ₽</strong>
-            </div>
-          ) : null}
+            <strong>{formatMoney(price)} ₽</strong>
+          </button>
+          <button
+            className={["totalAmount", "actualAmount"].includes(keypad.field) ? "active" : ""}
+            type="button"
+            onClick={() => onSelectParameter("totalAmount")}
+          >
+            <span>Сумма</span>
+            <strong>{formatMoney(amount)} ₽</strong>
+          </button>
+          <button
+            className={keypad.field === "quantity" ? "active" : ""}
+            type="button"
+            onClick={() => onSelectParameter("quantity")}
+          >
+            <span>{unit === "piece" ? "Штуки" : "Вес"}</span>
+            <strong>{unit === "piece" ? formatMoney(quantity) : formatWeight(quantity, weightPrecision)} {unitLabel(unit)}</strong>
+          </button>
         </div>
-        <div className="pad-display">{`${keypad.value || 0} ${keypad.suffix}`}</div>
+        <div className="pad-display" aria-live="polite">
+          <strong>{keypad.value || 0}</strong>
+          <span>{keypad.suffix}</span>
+        </div>
         <div className="pad-grid">
           {numberKeys.map((key) => (
-            <button key={key} className={`pad-key ${["+", "-", "*", "/"].includes(key) ? "operator" : ""}`.trim()} type="button" onClick={() => onAppend(key)}>
-              {key === "*" ? "×" : key === "/" ? "÷" : key}
+            <button key={key} className="pad-key" type="button" onClick={() => onAppend(key)}>
+              {key}
             </button>
           ))}
-          <button className="pad-key utility" type="button" onClick={onClear}>
-            C
-          </button>
-          <button className="pad-key utility" type="button" onClick={onBackspace}>
+          <button className="pad-key utility backspace-key" type="button" aria-label="Удалить цифру" onClick={onBackspace}>
             ←
           </button>
-          <button className="pad-key utility" type="button" onClick={onSubmit}>
-            {keypad.submitLabel}
-          </button>
-          <button className="pad-key confirm" type="button" onClick={onSubmit}>
-            OK
+        </div>
+        <div className="compact-pad-actions">
+          <button className="compact-pad-clear" type="button" onClick={onClear}>Очистить</button>
+          <button className="compact-pad-confirm" type="button" onClick={onSubmit}>
+            Готово <span>{keypad.submitLabel}</span>
           </button>
         </div>
       </div>
