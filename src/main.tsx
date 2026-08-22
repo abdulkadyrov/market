@@ -11,12 +11,12 @@ const renderFatal = (message: string) => {
   }
 
   root.innerHTML = `
-    <div style="min-height:100vh;padding:24px;background:#f4efe4;color:#1b1308;font-family:Trebuchet MS,Segoe UI,sans-serif;">
-      <div style="max-width:640px;margin:0 auto;background:#fffaf1;border:2px solid #d8c7ac;border-radius:24px;padding:20px;">
-        <div style="font-size:14px;color:#6f604f;margin-bottom:8px;">Ошибка запуска приложения</div>
-        <h1 style="margin:0 0 12px;font-size:28px;">Не удалось открыть Market Bazaar</h1>
-        <pre style="white-space:pre-wrap;word-break:break-word;background:#efe4cd;padding:14px;border-radius:18px;">${message}</pre>
-        <p style="color:#6f604f;">Сделайте скриншот этого экрана и пришлите его, если ошибка повторится.</p>
+    <div style="min-height:100vh;padding:24px;background:#f6f7fb;color:#1c1b22;font-family:Inter,-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;">
+      <div style="max-width:640px;margin:0 auto;background:#fff;border:2px solid #e2e3eb;border-radius:24px;padding:20px;">
+        <div style="font-size:14px;color:#6f6c7a;margin-bottom:8px;">Ошибка запуска приложения</div>
+        <h1 style="margin:0 0 12px;font-size:28px;">Не удалось открыть WayYaam Кассу</h1>
+        <pre style="white-space:pre-wrap;word-break:break-word;background:#f0edff;padding:14px;border-radius:18px;">${message}</pre>
+        <p style="color:#6f6c7a;">Сделайте скриншот этого экрана и пришлите его, если ошибка повторится.</p>
       </div>
     </div>
   `;

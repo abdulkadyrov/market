@@ -313,7 +313,9 @@ export const markDatabaseInitialized = () => {
   clearDemoRequest();
 };
 
-export const seedDatabase = async () => {
+let seedPromise: Promise<void> | null = null;
+
+const seedDatabaseOnce = async () => {
   const existing = await db.products.count();
 
   if (existing > 0) {
@@ -326,14 +328,26 @@ export const seedDatabase = async () => {
     return;
   }
 
-  await db.stockGroups.bulkAdd(stockGroups);
-  await db.products.bulkAdd(products);
-  await db.receipts.bulkAdd(receipts);
-  await db.sales.bulkAdd(sales);
-  await db.expenses.bulkAdd(expenses);
-  await db.writeOffs.bulkAdd(writeOffs);
-  await db.quickButtonSettings.bulkAdd(quickButtons);
-  await db.appSettings.bulkAdd(appSettings);
+  await db.transaction("rw", db.tables, async () => {
+    await db.stockGroups.bulkPut(stockGroups);
+    await db.products.bulkPut(products);
+    await db.receipts.bulkPut(receipts);
+    await db.sales.bulkPut(sales);
+    await db.expenses.bulkPut(expenses);
+    await db.writeOffs.bulkPut(writeOffs);
+    await db.quickButtonSettings.bulkPut(quickButtons);
+    await db.appSettings.bulkPut(appSettings);
+  });
   setInitialized();
   clearDemoRequest();
+};
+
+export const seedDatabase = () => {
+  if (!seedPromise) {
+    seedPromise = seedDatabaseOnce().catch((error) => {
+      seedPromise = null;
+      throw error;
+    });
+  }
+  return seedPromise;
 };

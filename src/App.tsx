@@ -13,8 +13,10 @@ import {
   Receipt,
   RotateCcw,
   Save,
+  Search,
   Settings,
   ShoppingBasket,
+  Store,
   Trash2,
   TrendingUp,
   Upload,
@@ -152,10 +154,9 @@ interface ExpenseDraft extends Expense {}
 const screens: Array<{ id: Screen; label: string; icon: typeof ShoppingBasket }> = [
   { id: "sale", label: "Продажа", icon: ShoppingBasket },
   { id: "products", label: "Товары", icon: Package },
-  { id: "groups", label: "Партии", icon: Boxes },
-  { id: "receipts", label: "Поступ.", icon: Receipt },
+  { id: "receipts", label: "Поступления", icon: Receipt },
   { id: "history", label: "История", icon: History },
-  { id: "reports", label: "Отчеты", icon: TrendingUp },
+  { id: "reports", label: "Аналитика", icon: TrendingUp },
   { id: "settings", label: "Еще", icon: Settings }
 ];
 
@@ -236,7 +237,13 @@ function App() {
   const [writeOffDraft, setWriteOffDraft] = useState<WriteOffDraft | null>(null);
   const [expenseDraft, setExpenseDraft] = useState<ExpenseDraft | null>(null);
   const [historyRange, setHistoryRange] = useState<"today" | "7d" | "30d" | "all">("today");
+  const [analyticsRange, setAnalyticsRange] = useState<"today" | "7d" | "30d" | "all">("today");
+  const [productQuery, setProductQuery] = useState("");
+  const [selectedCategory, setSelectedCategory] = useState("Все");
+  const [newWeightPreset, setNewWeightPreset] = useState("");
+  const [newAmountPreset, setNewAmountPreset] = useState("");
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const saleCheckoutRef = useRef<HTMLDivElement | null>(null);
 
   const stockGroups = useLiveQuery(() => db.stockGroups.toArray(), [], []) ?? [];
   const products = useLiveQuery(() => db.products.orderBy("updatedAt").toArray(), [], []) ?? [];
@@ -248,7 +255,8 @@ function App() {
   const appSettings = useLiveQuery(() => db.appSettings.get("main"), [], defaultSettings);
 
   const settings = appSettings ?? defaultSettings;
-  const saleQuickButtons = useMemo(() => quickButtons.filter((button) => button.type !== "round"), [quickButtons]);
+  const weightQuickButtons = useMemo(() => quickButtons.filter((button) => button.type === "weight"), [quickButtons]);
+  const amountQuickButtons = useMemo(() => quickButtons.filter((button) => button.type === "amount"), [quickButtons]);
 
   useEffect(() => {
     void (async () => {
@@ -294,6 +302,23 @@ function App() {
     () => new Map(productViews.map((product) => [product.id, product])),
     [productViews]
   );
+
+  const productCategories = useMemo(
+    () => ["Все", ...Array.from(new Set(productViews.map((product) => product.category))).sort()],
+    [productViews]
+  );
+
+  const filteredProductViews = useMemo(() => {
+    const query = productQuery.trim().toLocaleLowerCase("ru");
+    return productViews.filter((product) => {
+      const matchesCategory = selectedCategory === "Все" || product.category === selectedCategory;
+      const matchesQuery =
+        !query ||
+        product.displayName.toLocaleLowerCase("ru").includes(query) ||
+        product.category.toLocaleLowerCase("ru").includes(query);
+      return matchesCategory && matchesQuery;
+    });
+  }, [productQuery, productViews, selectedCategory]);
 
   const selectedProduct = selectedProductId ? productViewMap.get(selectedProductId) : undefined;
 
@@ -365,16 +390,32 @@ function App() {
   }, [expenses, historyRange, productViewMap, receipts, sales, settings.weightPrecision, stockGroups, writeOffs]);
 
   const report = useMemo(() => {
-    const revenue = sales.reduce((sum, item) => sum + item.finalTotalAmount, 0);
-    const purchase = receipts.reduce((sum, item) => sum + item.totalAmount, 0);
-    const expensesTotal = expenses.reduce((sum, item) => sum + item.amount, 0);
-    const writeOffTotal = writeOffs.reduce((sum, item) => sum + item.costAmount, 0);
-    const cogs = sales.reduce((sum, item) => sum + item.costOfGoodsSold, 0);
+    const periodSales = sales.filter((item) => isInRange(item.date, analyticsRange));
+    const periodReceipts = receipts.filter((item) => isInRange(item.date, analyticsRange));
+    const periodExpenses = expenses.filter((item) => isInRange(item.date, analyticsRange));
+    const periodWriteOffs = writeOffs.filter((item) => isInRange(item.date, analyticsRange));
+    const revenue = periodSales.reduce((sum, item) => sum + item.finalTotalAmount, 0);
+    const purchase = periodReceipts.reduce((sum, item) => sum + item.totalAmount, 0);
+    const expensesTotal = periodExpenses.reduce((sum, item) => sum + item.amount, 0);
+    const writeOffTotal = periodWriteOffs.reduce((sum, item) => sum + item.costAmount, 0);
+    const cogs = periodSales.reduce((sum, item) => sum + item.costOfGoodsSold, 0);
     const stockValue =
       stockGroups.reduce((sum, item) => sum + item.currentStock * item.averageCost, 0) +
       products
         .filter((item) => !item.stockGroupId && !item.isArchived)
         .reduce((sum, item) => sum + item.currentStock * item.averageCost, 0);
+
+    const topProductMap = new Map<string, { name: string; revenue: number; quantity: number }>();
+    for (const sale of periodSales) {
+      const current = topProductMap.get(sale.productId) ?? {
+        name: productViewMap.get(sale.productId)?.displayName ?? "Товар",
+        revenue: 0,
+        quantity: 0
+      };
+      current.revenue += sale.finalTotalAmount;
+      current.quantity += sale.quantity;
+      topProductMap.set(sale.productId, current);
+    }
 
     return {
       revenue,
@@ -383,9 +424,13 @@ function App() {
       writeOffs: writeOffTotal,
       cogs,
       profit: revenue - cogs - expensesTotal - writeOffTotal,
-      stockValue
+      stockValue,
+      topProducts: Array.from(topProductMap.entries())
+        .map(([id, item]) => ({ id, ...item }))
+        .sort((a, b) => b.revenue - a.revenue)
+        .slice(0, 5)
     };
-  }, [expenses, products, receipts, sales, stockGroups, writeOffs]);
+  }, [analyticsRange, expenses, productViewMap, products, receipts, sales, stockGroups, writeOffs]);
 
   const reservedStockByProduct = useMemo(() => {
     const map = new Map<string, number>();
@@ -471,6 +516,9 @@ function App() {
     }
     setSelectedProductId(productId);
     resetSale(product);
+    if (window.matchMedia("(max-width: 899px)").matches) {
+      window.requestAnimationFrame(() => saleCheckoutRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
+    }
   };
 
   const openKeypad = (field: KeypadField, title: string, value: number | string, suffix: string) => {
@@ -1011,17 +1059,22 @@ function App() {
     if (!file) {
       return;
     }
-    const text = await file.text();
-    const snapshot = JSON.parse(text);
-    await importSnapshot(snapshot);
-    markDatabaseInitialized();
-    event.target.value = "";
-    setProductDraft(null);
-    setGroupDraft(null);
-    setReceiptDraft(null);
-    setWriteOffDraft(null);
-    setExpenseDraft(null);
-    showToast("Импорт завершен");
+    try {
+      const text = await file.text();
+      await importSnapshot(JSON.parse(text));
+      markDatabaseInitialized();
+      setProductDraft(null);
+      setGroupDraft(null);
+      setReceiptDraft(null);
+      setWriteOffDraft(null);
+      setExpenseDraft(null);
+      resetEntireCheckout(undefined);
+      showToast("Импорт завершен");
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : "Не удалось импортировать файл");
+    } finally {
+      event.target.value = "";
+    }
   };
 
   const clearSalesHistory = async () => {
@@ -1159,6 +1212,39 @@ function App() {
     });
   };
 
+  const addQuickPreset = async (type: "weight" | "amount", rawValue: string) => {
+    const value = parseNumber(rawValue);
+    if (value <= 0) {
+      showToast(type === "weight" ? "Введите вес больше нуля" : "Введите сумму больше нуля");
+      return;
+    }
+    if (quickButtons.some((button) => button.type === type && button.value === value)) {
+      showToast("Такое быстрое значение уже есть");
+      return;
+    }
+    const timestamp = nowIso();
+    await db.quickButtonSettings.put({
+      id: makeId(`quick_${type}`),
+      type,
+      value,
+      label: type === "weight" ? `${formatWeight(value, settings.weightPrecision)} кг` : `${formatMoney(value)} ₽`,
+      order: quickButtons.reduce((max, button) => Math.max(max, button.order), -1) + 1,
+      createdAt: timestamp,
+      updatedAt: timestamp
+    });
+    if (type === "weight") {
+      setNewWeightPreset("");
+    } else {
+      setNewAmountPreset("");
+    }
+    showToast("Быстрое значение добавлено");
+  };
+
+  const deleteQuickPreset = async (button: QuickButtonSetting) => {
+    await db.quickButtonSettings.delete(button.id);
+    showToast("Быстрое значение удалено");
+  };
+
   if (startupError) {
     return (
       <div className="app-shell">
@@ -1176,39 +1262,75 @@ function App() {
     <div className="app-shell">
       <header className="topbar">
         <div>
-          <div className="eyebrow">MVP PWA для базара</div>
-          <h1>{screen === "sale" ? "Быстрая продажа" : screenLabel(screen)}</h1>
+          <div className="eyebrow">WayYaam касса · смена открыта</div>
+          <h1>{screen === "sale" ? "Касса" : screenLabel(screen)}</h1>
         </div>
-        <button className="icon-button" type="button" onClick={() => resetSale()}>
+        <button className="icon-button" type="button" aria-label="Сбросить текущий ввод" title="Сбросить текущий ввод" onClick={() => resetSale()}>
           <RotateCcw size={20} />
         </button>
       </header>
 
       <main className="content">
         {screen === "sale" && (
-          <>
-            <Section className="ribbon-section">
+          <div className="sale-workspace">
+            <Section className="ribbon-section sale-catalog">
               <div className="section-header">
-                <h2>Товары</h2>
-                <span>{productViews.length}</span>
+                <div>
+                  <div className="eyebrow">Каталог магазина</div>
+                  <h2>Товары</h2>
+                </div>
+                <span>{filteredProductViews.length} из {productViews.length}</span>
+              </div>
+              <div className="catalog-controls">
+                <label className="search-box">
+                  <Search size={20} aria-hidden="true" />
+                  <input
+                    value={productQuery}
+                    type="search"
+                    aria-label="Поиск по товарам"
+                    placeholder="Поиск по товарам"
+                    onChange={(event) => setProductQuery(event.target.value)}
+                  />
+                </label>
+                <div className="category-row" aria-label="Категории товаров">
+                  {productCategories.map((category) => (
+                    <button
+                      key={category}
+                      className={`category-chip ${selectedCategory === category ? "active" : ""}`}
+                      type="button"
+                      aria-pressed={selectedCategory === category}
+                      onClick={() => setSelectedCategory(category)}
+                    >
+                      {category}
+                    </button>
+                  ))}
+                </div>
               </div>
               <div className="product-ribbon">
-                {productViews.map((product) => (
+                {filteredProductViews.map((product) => (
                   <button
                     key={product.id}
                     className={`product-chip ${product.id === selectedProductId ? "active" : ""}`}
                     type="button"
                     onClick={() => chooseProduct(product.id)}
                   >
-                    <strong>{product.displayName}</strong>
-                    <span>{formatMoney(product.defaultSalePrice)} ₽/кг</span>
-                    <span>{getProductStockSubtitle(product)}</span>
+                    <span className="product-chip-visual" aria-hidden="true">{productEmoji(product.displayName)}</span>
+                    <span className="product-chip-copy">
+                      <span className="product-chip-category">{product.category}</span>
+                      <strong>{product.displayName}</strong>
+                      <span className="product-chip-price">{formatMoney(product.defaultSalePrice)} ₽/кг</span>
+                      <span className="product-chip-stock">{getProductStockSubtitle(product)}</span>
+                    </span>
                   </button>
                 ))}
+                {filteredProductViews.length === 0 ? (
+                  <EmptyState title="Товары не найдены" text="Измените запрос или выберите другую категорию." />
+                ) : null}
               </div>
             </Section>
 
-            <Section className="sale-focus">
+            <div ref={saleCheckoutRef} className="sale-checkout-column">
+              <Section className="sale-focus">
               <div className="sale-head">
                 <div>
                   <div className="eyebrow">Выбран товар</div>
@@ -1232,22 +1354,40 @@ function App() {
               </div>
 
               <div className="mode-grid">
-                <button
-                  className={`mode-tile ${saleEditor.mode === "by_weight" ? "active" : ""}`}
-                  type="button"
-                  onClick={() => openKeypad("quantity", "Введите вес", saleEditor.quantity, "кг")}
-                >
-                  <span>ВЕС</span>
-                  <strong>{saleEditor.quantity > 0 ? `${formatWeight(saleEditor.quantity, settings.weightPrecision)} кг` : "Введите кг"}</strong>
-                </button>
-                <button
-                  className={`mode-tile ${saleEditor.mode === "by_amount" ? "active" : ""}`}
-                  type="button"
-                  onClick={() => openKeypad("totalAmount", "Введите сумму", saleEditor.totalAmount, "₽")}
-                >
-                  <span>СУММА</span>
-                  <strong>{saleEditor.totalAmount > 0 ? `${formatMoney(saleEditor.totalAmount)} ₽` : "Введите ₽"}</strong>
-                </button>
+                <div className="mode-card">
+                  <button
+                    className={`mode-tile ${saleEditor.mode === "by_weight" ? "active" : ""}`}
+                    type="button"
+                    onClick={() => openKeypad("quantity", "Введите вес", saleEditor.quantity, "кг")}
+                  >
+                    <span>ПО ВЕСУ</span>
+                    <strong>{saleEditor.quantity > 0 ? `${formatWeight(saleEditor.quantity, settings.weightPrecision)} кг` : "Ввести кг"}</strong>
+                  </button>
+                  <div className="mode-presets" aria-label="Быстрый выбор веса">
+                    {weightQuickButtons.map((button) => (
+                      <button key={button.id} className="preset-chip" type="button" onClick={() => quickApply(button)}>
+                        {button.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="mode-card">
+                  <button
+                    className={`mode-tile ${saleEditor.mode === "by_amount" ? "active" : ""}`}
+                    type="button"
+                    onClick={() => openKeypad("totalAmount", "Введите сумму", saleEditor.totalAmount, "₽")}
+                  >
+                    <span>НА СУММУ</span>
+                    <strong>{saleEditor.totalAmount > 0 ? `${formatMoney(saleEditor.totalAmount)} ₽` : "Ввести ₽"}</strong>
+                  </button>
+                  <div className="mode-presets" aria-label="Быстрый выбор суммы">
+                    {amountQuickButtons.map((button) => (
+                      <button key={button.id} className="preset-chip" type="button" onClick={() => quickApply(button)}>
+                        {button.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
               </div>
 
               <div className="result-panel">
@@ -1280,7 +1420,7 @@ function App() {
 
               <div className="quick-actions">
                 <ActionButton onClick={() => setToolPanel((current) => (current === "discount" ? null : "discount"))}>Скидка</ActionButton>
-                <ActionButton onClick={() => setToolPanel((current) => (current === "change" ? null : "change"))}>Расчет</ActionButton>
+                <ActionButton onClick={() => setToolPanel((current) => (current === "change" ? null : "change"))}>Оплата и сдача</ActionButton>
                 <button className="primary-button checkout-add-button" type="button" onClick={addCurrentItemToCart}>
                   В чек
                 </button>
@@ -1294,16 +1434,6 @@ function App() {
                   Сбросить все
                 </button>
               </div>
-
-              {saleQuickButtons.length > 0 && (
-                <div className="quick-button-row">
-                  {saleQuickButtons.map((button) => (
-                    <button key={button.id} className="quick-pill" type="button" onClick={() => quickApply(button)}>
-                      {button.label}
-                    </button>
-                  ))}
-                </div>
-              )}
 
               {toolPanel === "discount" && (
                 <Panel title="Скидка">
@@ -1393,14 +1523,17 @@ function App() {
                 onSubmit={submitKeypad}
                 onClose={() => setKeypad(null)}
               />
-            </Section>
+              </Section>
 
-            <div className="sell-bar">
-              <button className="sell-button" type="button" onClick={() => void persistSale()} disabled={isSavingSale}>
-                {isSavingSale ? "СОХРАНЕНИЕ..." : `ПРОДАТЬ ${checkoutTotal > 0 ? `${formatMoney(checkoutTotal)} ₽` : ""}`.trim()}
-              </button>
+              <div className="sell-bar">
+                <button className="sell-button" type="button" onClick={() => void persistSale()} disabled={isSavingSale}>
+                  {isSavingSale
+                    ? "СОХРАНЕНИЕ..."
+                    : `ЗАВЕРШИТЬ ПРОДАЖУ ${checkoutTotal > 0 ? `· ${formatMoney(checkoutTotal)} ₽` : ""}`.trim()}
+                </button>
+              </div>
             </div>
-          </>
+          </div>
         )}
 
         {screen === "products" && (
@@ -1781,16 +1914,58 @@ function App() {
           <>
             <Section>
               <div className="section-header">
-                <h2>Отчеты</h2>
-                <span>По локальным данным</span>
+                <div>
+                  <div className="eyebrow">По локальным данным</div>
+                  <h2>Аналитика</h2>
+                </div>
+                <div className="range-row">
+                  {[
+                    ["today", "Сегодня"],
+                    ["7d", "7 дней"],
+                    ["30d", "30 дней"],
+                    ["all", "Все"]
+                  ].map(([value, label]) => (
+                    <button
+                      key={value}
+                      className={`range-chip ${analyticsRange === value ? "active" : ""}`}
+                      type="button"
+                      onClick={() => setAnalyticsRange(value as "today" | "7d" | "30d" | "all")}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
               </div>
               <div className="stats-grid">
                 <StatCard icon={<Wallet size={20} />} label="Выручка" value={`${formatMoney(report.revenue)} ₽`} />
                 <StatCard icon={<Receipt size={20} />} label="Закупка" value={`${formatMoney(report.purchase)} ₽`} />
+                <StatCard icon={<Boxes size={20} />} label="Себестоимость продаж" value={`${formatMoney(report.cogs)} ₽`} />
                 <StatCard icon={<ClipboardList size={20} />} label="Расходы" value={`${formatMoney(report.expenses)} ₽`} />
                 <StatCard icon={<Archive size={20} />} label="Списания" value={`${formatMoney(report.writeOffs)} ₽`} />
                 <StatCard icon={<Boxes size={20} />} label="Остатки" value={`${formatMoney(report.stockValue)} ₽`} />
                 <StatCard icon={<TrendingUp size={20} />} label="Прибыль" value={`${formatMoney(report.profit)} ₽`} />
+              </div>
+            </Section>
+
+            <Section>
+              <div className="section-header">
+                <h2>Лидеры продаж</h2>
+                <span>По выручке</span>
+              </div>
+              <div className="list-stack">
+                {report.topProducts.length === 0 ? (
+                  <EmptyState title="Еще нет продаж" text="Продажи за выбранный период появятся здесь." />
+                ) : (
+                  report.topProducts.map((product, index) => (
+                    <ListCard
+                      key={product.id}
+                      title={`${index + 1}. ${product.name}`}
+                      subtitle={`${formatWeight(product.quantity, settings.weightPrecision)} кг`}
+                      meta="Продажи за выбранный период"
+                      side={`${formatMoney(product.revenue)} ₽`}
+                    />
+                  ))
+                )}
               </div>
             </Section>
 
@@ -1834,6 +2009,52 @@ function App() {
                     <option value="3">3 знака</option>
                   </select>
                 </Field>
+                <div className="preset-settings">
+                  <div>
+                    <h3>Быстрые значения</h3>
+                    <p className="muted">Они появятся сразу под режимами «По весу» и «На сумму».</p>
+                  </div>
+                  <Field label="Добавить вес, кг">
+                    <div className="inline-add-row">
+                      <input
+                        inputMode="decimal"
+                        value={newWeightPreset}
+                        placeholder="Например, 2.5"
+                        onChange={(event) => setNewWeightPreset(event.target.value)}
+                      />
+                      <button className="primary-button" type="button" onClick={() => void addQuickPreset("weight", newWeightPreset)}>
+                        <Plus size={18} /> Добавить
+                      </button>
+                    </div>
+                  </Field>
+                  <div className="editable-preset-row">
+                    {weightQuickButtons.map((button) => (
+                      <button key={button.id} className="editable-preset" type="button" title={`Удалить ${button.label}`} onClick={() => void deleteQuickPreset(button)}>
+                        {button.label} <X size={14} />
+                      </button>
+                    ))}
+                  </div>
+                  <Field label="Добавить сумму, ₽">
+                    <div className="inline-add-row">
+                      <input
+                        inputMode="decimal"
+                        value={newAmountPreset}
+                        placeholder="Например, 1000"
+                        onChange={(event) => setNewAmountPreset(event.target.value)}
+                      />
+                      <button className="primary-button" type="button" onClick={() => void addQuickPreset("amount", newAmountPreset)}>
+                        <Plus size={18} /> Добавить
+                      </button>
+                    </div>
+                  </Field>
+                  <div className="editable-preset-row">
+                    {amountQuickButtons.map((button) => (
+                      <button key={button.id} className="editable-preset" type="button" title={`Удалить ${button.label}`} onClick={() => void deleteQuickPreset(button)}>
+                        {button.label} <X size={14} />
+                      </button>
+                    ))}
+                  </div>
+                </div>
                 <div className="settings-actions">
                   <button className="secondary-button" type="button" onClick={() => void handleExport()}>
                     <Download size={18} /> Экспорт JSON
@@ -2016,6 +2237,13 @@ function App() {
       </main>
 
       <nav className="bottom-nav">
+        <div className="nav-brand">
+          <span className="nav-brand-mark"><Store size={22} /></span>
+          <span>
+            <strong>WayYaam</strong>
+            <small>касса магазина</small>
+          </span>
+        </div>
         {screens.map((item) => {
           const Icon = item.icon;
           return (
@@ -2030,6 +2258,10 @@ function App() {
             </button>
           );
         })}
+        <div className="nav-shift">
+          <span className="shift-dot" />
+          <span><strong>Смена открыта</strong><small>Локальный режим</small></span>
+        </div>
       </nav>
 
       <input ref={fileInputRef} hidden type="file" accept="application/json" onChange={(event) => void handleImportFile(event)} />
@@ -2300,18 +2532,40 @@ function NumberPad({
 
 function screenLabel(screen: Screen) {
   const labels: Record<Screen, string> = {
-    sale: "Быстрая продажа",
+    sale: "Касса",
     products: "Товары",
     groups: "Общие партии",
     receipts: "Поступления и списания",
     writeOffs: "Списания",
     expenses: "Расходы",
     history: "История",
-    reports: "Отчеты",
+    reports: "Аналитика",
     settings: "Настройки"
   };
 
   return labels[screen];
+}
+
+function isInRange(date: string, range: "today" | "7d" | "30d" | "all") {
+  if (range === "all") {
+    return true;
+  }
+  if (range === "today") {
+    return isToday(date);
+  }
+  const days = range === "7d" ? 7 : 30;
+  return new Date(date).getTime() >= Date.now() - days * 24 * 60 * 60 * 1000;
+}
+
+function productEmoji(name: string) {
+  const normalized = name.toLocaleLowerCase("ru");
+  if (normalized.includes("помид")) return "🍅";
+  if (normalized.includes("огур")) return "🥒";
+  if (normalized.includes("перец") || normalized.includes("болгар")) return "🫑";
+  if (normalized.includes("карто")) return "🥔";
+  if (normalized.includes("лук")) return "🧅";
+  if (normalized.includes("яблок")) return "🍎";
+  return "🛒";
 }
 
 function historyTypeLabel(type: "sale" | "receipt" | "expense" | "writeOff") {

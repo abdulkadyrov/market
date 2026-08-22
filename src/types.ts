@@ -115,6 +115,8 @@ export interface AppSettings {
 }
 
 export interface AppSnapshot {
+  schemaVersion: 1;
+  exportedAt: string;
   stockGroups: StockGroup[];
   products: Product[];
   receipts: Receipt[];

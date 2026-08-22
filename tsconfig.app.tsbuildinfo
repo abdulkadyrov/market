@@ -1,1 +1,1 @@
-{"root":["./src/App.tsx","./src/db.ts","./src/logic.ts","./src/main.tsx","./src/seed.ts","./src/types.ts","./src/utils.ts","./src/vite-env.d.ts","./src/services/exportImport.ts"],"version":"5.9.3"}
+{"root":["./src/app.tsx","./src/db.ts","./src/logic.test.ts","./src/logic.ts","./src/main.tsx","./src/seed.ts","./src/types.ts","./src/utils.ts","./src/vite-env.d.ts","./src/services/exportimport.ts","./src/services/snapshotvalidation.test.ts","./src/services/snapshotvalidation.ts"],"version":"5.9.3"}
