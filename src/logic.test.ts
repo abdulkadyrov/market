@@ -4,6 +4,7 @@ import {
   calculateWriteOffQuantity,
   createEmptySaleEditor,
   editActualTotal,
+  editPieceAmount,
   editTotal,
   editWeight,
   setReceivedAmount
@@ -12,6 +13,7 @@ import type { ProductView } from "./types";
 
 const product: ProductView = {
   id: "product_tomato",
+  profileId: "profile_test",
   name: "Помидоры",
   variant: "",
   displayName: "Помидоры",
@@ -82,6 +84,17 @@ describe("расчет продажи", () => {
     expect(actual.finalTotalAmount).toBe(307);
     expect(actual.differenceAmount).toBe(7);
     expect(actual.quantity).toBe(5.12);
+  });
+
+  it("округляет штучный товар вверх до целого количества", () => {
+    const watermelon = { ...product, unit: "piece" as const, defaultSalePrice: 90 };
+    const result = editPieceAmount(createEmptySaleEditor(watermelon), 300, 2);
+
+    expect(result.mode).toBe("by_amount");
+    expect(result.requestedAmount).toBe(300);
+    expect(result.quantity).toBe(4);
+    expect(result.finalTotalAmount).toBe(360);
+    expect(result.differenceAmount).toBe(60);
   });
 });
 

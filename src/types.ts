@@ -6,8 +6,20 @@ export type DiscountType = "amount" | "percent";
 export type HistoryEntity = "sale" | "receipt" | "expense" | "writeOff";
 export type ThemeMode = "light" | "contrast";
 
+export interface StoreProfile {
+  id: string;
+  name: string;
+  city: string;
+  marketName: string;
+  pointName: string;
+  isArchived: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface StockGroup {
   id: string;
+  profileId: string;
   name: string;
   unit: Unit;
   currentStock: number;
@@ -19,6 +31,7 @@ export interface StockGroup {
 
 export interface Product {
   id: string;
+  profileId: string;
   name: string;
   variant: string;
   category: string;
@@ -36,6 +49,7 @@ export interface Product {
 
 export interface Receipt {
   id: string;
+  profileId: string;
   stockGroupId?: string;
   productId?: string;
   date: string;
@@ -50,6 +64,7 @@ export interface Receipt {
 
 export interface Sale {
   id: string;
+  profileId: string;
   saleBatchId?: string;
   productId: string;
   stockGroupId?: string;
@@ -77,6 +92,7 @@ export interface Sale {
 
 export interface Expense {
   id: string;
+  profileId: string;
   date: string;
   category: string;
   amount: number;
@@ -87,6 +103,7 @@ export interface Expense {
 
 export interface WriteOff {
   id: string;
+  profileId: string;
   stockGroupId?: string;
   productId?: string;
   date: string;
@@ -114,6 +131,7 @@ export interface QuickButtonSetting {
 
 export interface AppSettings {
   id: string;
+  activeProfileId: string;
   theme: ThemeMode;
   weightPrecision: number;
   currencySymbol: string;
@@ -122,8 +140,9 @@ export interface AppSettings {
 }
 
 export interface AppSnapshot {
-  schemaVersion: 2;
+  schemaVersion: 3;
   exportedAt: string;
+  storeProfiles: StoreProfile[];
   stockGroups: StockGroup[];
   products: Product[];
   receipts: Receipt[];

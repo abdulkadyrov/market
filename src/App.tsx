@@ -4,21 +4,25 @@ import {
   Archive,
   Boxes,
   Calculator,
+  ChevronDown,
   Check,
   ClipboardList,
   Download,
   History,
+  MapPin,
   Package,
   Plus,
   Receipt,
   RotateCcw,
   Save,
   Search,
+  Share2,
   Settings,
   ShoppingBasket,
   Store,
   Trash2,
   TrendingUp,
+  Truck,
   Upload,
   Wallet,
   X
@@ -31,6 +35,7 @@ import {
   createEmptySaleEditor,
   defaultSettings,
   editActualTotal,
+  editPieceAmount,
   editPrice,
   editTotal,
   editWeight,
@@ -51,9 +56,12 @@ import type {
   Receipt as ReceiptEntity,
   Sale,
   SaleMode,
+  StoreProfile,
   StockGroup,
+  Unit,
   WriteOff
 } from "./types";
+import { bazaarCities, DEFAULT_PROFILE_ID, profileLocationLabel } from "./profiles";
 import {
   downloadTextFile,
   evaluateExpression,
@@ -110,6 +118,7 @@ interface CartLine {
   id: string;
   productId: string;
   productName: string;
+  unit: Unit;
   stockGroupId?: string;
   requestedQuantity?: number;
   requestedAmount: number;
@@ -133,6 +142,7 @@ interface GroupDraft extends StockGroup {}
 
 interface ReceiptDraft {
   id: string;
+  profileId: string;
   targetType: "group" | "product";
   targetId: string;
   date: string;
@@ -145,6 +155,7 @@ interface ReceiptDraft {
 
 interface WriteOffDraft {
   id: string;
+  profileId: string;
   targetType: "group" | "product";
   targetId: string;
   date: string;
@@ -159,6 +170,8 @@ interface WriteOffDraft {
 
 interface ExpenseDraft extends Expense {}
 
+interface ProfileDraft extends StoreProfile {}
+
 const screens: Array<{ id: Screen; label: string; icon: typeof ShoppingBasket }> = [
   { id: "sale", label: "Продажа", icon: ShoppingBasket },
   { id: "products", label: "Товары", icon: Package },
@@ -168,8 +181,9 @@ const screens: Array<{ id: Screen; label: string; icon: typeof ShoppingBasket }>
   { id: "settings", label: "Еще", icon: Settings }
 ];
 
-const emptyProductDraft = (): ProductDraft => ({
+const emptyProductDraft = (profileId: string): ProductDraft => ({
   id: makeId("product"),
+  profileId,
   name: "",
   variant: "",
   category: "Овощи",
@@ -184,8 +198,9 @@ const emptyProductDraft = (): ProductDraft => ({
   updatedAt: nowIso()
 });
 
-const emptyGroupDraft = (): GroupDraft => ({
+const emptyGroupDraft = (profileId: string): GroupDraft => ({
   id: makeId("group"),
+  profileId,
   name: "",
   unit: "kg",
   currentStock: 0,
@@ -195,8 +210,9 @@ const emptyGroupDraft = (): GroupDraft => ({
   updatedAt: nowIso()
 });
 
-const emptyReceiptDraft = (): ReceiptDraft => ({
+const emptyReceiptDraft = (profileId: string): ReceiptDraft => ({
   id: makeId("receipt"),
+  profileId,
   targetType: "group",
   targetId: "",
   date: nowIso(),
@@ -207,8 +223,9 @@ const emptyReceiptDraft = (): ReceiptDraft => ({
   comment: ""
 });
 
-const emptyWriteOffDraft = (): WriteOffDraft => ({
+const emptyWriteOffDraft = (profileId: string): WriteOffDraft => ({
   id: makeId("writeoff"),
+  profileId,
   targetType: "group",
   targetId: "",
   date: nowIso(),
@@ -221,15 +238,33 @@ const emptyWriteOffDraft = (): WriteOffDraft => ({
   comment: ""
 });
 
-const emptyExpenseDraft = (): ExpenseDraft => ({
+const emptyExpenseDraft = (profileId: string): ExpenseDraft => ({
   id: makeId("expense"),
+  profileId,
   date: nowIso(),
-  category: "Прочее",
+  category: "Аренда",
   amount: 0,
   comment: "",
   createdAt: nowIso(),
   updatedAt: nowIso()
 });
+
+const emptyProfileDraft = (): ProfileDraft => ({
+  id: makeId("profile"),
+  name: "",
+  city: "Махачкала",
+  marketName: "",
+  pointName: "",
+  isArchived: false,
+  createdAt: nowIso(),
+  updatedAt: nowIso()
+});
+
+const unitLabel = (unit: Unit = "kg") =>
+  ({ kg: "кг", piece: "шт", box: "ящ.", bag: "меш.", net: "сет.", other: "ед." })[unit];
+
+const formatQuantity = (value: number, unit: Unit, precision: number) =>
+  `${unit === "piece" ? formatMoney(value) : formatWeight(value, precision)} ${unitLabel(unit)}`;
 
 function App() {
   const [startupError, setStartupError] = useState<string>("");
@@ -248,6 +283,7 @@ function App() {
   const [receiptDraft, setReceiptDraft] = useState<ReceiptDraft | null>(null);
   const [writeOffDraft, setWriteOffDraft] = useState<WriteOffDraft | null>(null);
   const [expenseDraft, setExpenseDraft] = useState<ExpenseDraft | null>(null);
+  const [profileDraft, setProfileDraft] = useState<ProfileDraft | null>(null);
   const [historyRange, setHistoryRange] = useState<"today" | "7d" | "30d" | "all">("today");
   const [analyticsRange, setAnalyticsRange] = useState<"today" | "7d" | "30d" | "all">("today");
   const [productQuery, setProductQuery] = useState("");
@@ -257,16 +293,37 @@ function App() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const saleCheckoutRef = useRef<HTMLDivElement | null>(null);
 
-  const stockGroups = useLiveQuery(() => db.stockGroups.toArray(), [], []) ?? [];
-  const products = useLiveQuery(() => db.products.orderBy("updatedAt").toArray(), [], []) ?? [];
-  const receipts = useLiveQuery(() => db.receipts.orderBy("date").reverse().toArray(), [], []) ?? [];
-  const sales = useLiveQuery(() => db.sales.orderBy("date").reverse().toArray(), [], []) ?? [];
-  const expenses = useLiveQuery(() => db.expenses.orderBy("date").reverse().toArray(), [], []) ?? [];
-  const writeOffs = useLiveQuery(() => db.writeOffs.orderBy("date").reverse().toArray(), [], []) ?? [];
+  const storeProfiles = useLiveQuery(() => db.storeProfiles.orderBy("name").toArray(), [], []) ?? [];
+  const allStockGroups = useLiveQuery(() => db.stockGroups.toArray(), [], []) ?? [];
+  const allProducts = useLiveQuery(() => db.products.orderBy("updatedAt").toArray(), [], []) ?? [];
+  const allReceipts = useLiveQuery(() => db.receipts.orderBy("date").reverse().toArray(), [], []) ?? [];
+  const allSales = useLiveQuery(() => db.sales.orderBy("date").reverse().toArray(), [], []) ?? [];
+  const allExpenses = useLiveQuery(() => db.expenses.orderBy("date").reverse().toArray(), [], []) ?? [];
+  const allWriteOffs = useLiveQuery(() => db.writeOffs.orderBy("date").reverse().toArray(), [], []) ?? [];
   const quickButtons = useLiveQuery(() => db.quickButtonSettings.orderBy("order").toArray(), [], []) ?? [];
   const appSettings = useLiveQuery(() => db.appSettings.get("main"), [], defaultSettings);
 
   const settings = appSettings ?? defaultSettings;
+  const activeProfileId = storeProfiles.some((profile) => profile.id === settings.activeProfileId && !profile.isArchived)
+    ? settings.activeProfileId
+    : storeProfiles.find((profile) => !profile.isArchived)?.id ?? DEFAULT_PROFILE_ID;
+  const activeProfile = storeProfiles.find((profile) => profile.id === activeProfileId);
+  const stockGroups = useMemo(() => allStockGroups.filter((item) => item.profileId === activeProfileId), [activeProfileId, allStockGroups]);
+  const products = useMemo(() => allProducts.filter((item) => item.profileId === activeProfileId), [activeProfileId, allProducts]);
+  const receipts = useMemo(() => allReceipts.filter((item) => item.profileId === activeProfileId), [activeProfileId, allReceipts]);
+  const sales = useMemo(() => allSales.filter((item) => item.profileId === activeProfileId), [activeProfileId, allSales]);
+  const expenses = useMemo(() => allExpenses.filter((item) => item.profileId === activeProfileId), [activeProfileId, allExpenses]);
+  const writeOffs = useMemo(() => allWriteOffs.filter((item) => item.profileId === activeProfileId), [activeProfileId, allWriteOffs]);
+  const todayExpenses = useMemo(() => expenses.filter((item) => isToday(item.date)), [expenses]);
+  const todayExpenseTotal = useMemo(() => todayExpenses.reduce((sum, item) => sum + item.amount, 0), [todayExpenses]);
+  const todayExpenseByCategory = useMemo(
+    () =>
+      todayExpenses.reduce<Record<string, number>>((totals, item) => {
+        totals[item.category] = (totals[item.category] ?? 0) + item.amount;
+        return totals;
+      }, {}),
+    [todayExpenses]
+  );
   const weightQuickButtons = useMemo(() => quickButtons.filter((button) => button.type === "weight"), [quickButtons]);
   const amountQuickButtons = useMemo(() => quickButtons.filter((button) => button.type === "amount"), [quickButtons]);
 
@@ -283,6 +340,27 @@ function App() {
   useEffect(() => {
     document.documentElement.dataset.theme = settings.theme;
   }, [settings.theme]);
+
+  useEffect(() => {
+    if (storeProfiles.length > 0 && settings.activeProfileId !== activeProfileId) {
+      void db.appSettings.put({ ...settings, activeProfileId, updatedAt: nowIso() });
+    }
+  }, [activeProfileId, settings, storeProfiles.length]);
+
+  useEffect(() => {
+    setSelectedProductId("");
+    setSaleEditor(createEmptySaleEditor());
+    setSaleCart([]);
+    setReceivedAmountState(0);
+    setKeypad(null);
+    setToolPanel(null);
+    setSelectedCategory("Все");
+    setProductDraft(null);
+    setGroupDraft(null);
+    setReceiptDraft(null);
+    setWriteOffDraft(null);
+    setExpenseDraft(null);
+  }, [activeProfileId]);
 
   useEffect(() => {
     if (!toast) {
@@ -314,6 +392,8 @@ function App() {
     () => new Map(productViews.map((product) => [product.id, product])),
     [productViews]
   );
+  const productMap = useMemo(() => new Map(products.map((product) => [product.id, product])), [products]);
+  const stockGroupMap = useMemo(() => new Map(stockGroups.map((group) => [group.id, group])), [stockGroups]);
 
   const productCategories = useMemo(
     () => ["Все", ...Array.from(new Set(productViews.map((product) => product.category))).sort()],
@@ -333,6 +413,14 @@ function App() {
   }, [productQuery, productViews, selectedCategory]);
 
   const selectedProduct = selectedProductId ? productViewMap.get(selectedProductId) : undefined;
+  const selectedUnit = selectedProduct?.unit ?? "kg";
+  const isPieceSelected = selectedUnit === "piece";
+  const receiptDraftUnit = receiptDraft?.targetType === "group"
+    ? stockGroupMap.get(receiptDraft.targetId)?.unit ?? "kg"
+    : productMap.get(receiptDraft?.targetId ?? "")?.unit ?? "kg";
+  const writeOffDraftUnit = writeOffDraft?.targetType === "group"
+    ? stockGroupMap.get(writeOffDraft.targetId)?.unit ?? "kg"
+    : productMap.get(writeOffDraft?.targetId ?? "")?.unit ?? "kg";
 
   useEffect(() => {
     if (productViews.length === 0) {
@@ -355,7 +443,7 @@ function App() {
         date: item.date,
         title: productViewMap.get(item.productId)?.displayName ?? "Продажа",
         amount: item.finalTotalAmount,
-        subtext: `${formatWeight(item.quantity, settings.weightPrecision)} кг · запрос ${formatMoney(item.requestedAmount ?? item.finalTotalAmount)} ₽ · разница ${formatSignedMoney(item.differenceAmount ?? item.finalTotalAmount - (item.requestedAmount ?? item.finalTotalAmount))}`
+        subtext: `${formatQuantity(item.quantity, productMap.get(item.productId)?.unit ?? "kg", settings.weightPrecision)} · запрос ${formatMoney(item.requestedAmount ?? item.finalTotalAmount)} ₽ · разница ${formatSignedMoney(item.differenceAmount ?? item.finalTotalAmount - (item.requestedAmount ?? item.finalTotalAmount))}`
       })),
       ...receipts.map((item) => ({
         id: item.id,
@@ -365,7 +453,11 @@ function App() {
           ? stockGroups.find((group) => group.id === item.stockGroupId)?.name ?? "Поступление"
           : productViewMap.get(item.productId ?? "")?.displayName ?? "Поступление",
         amount: item.totalAmount,
-        subtext: `${formatWeight(item.quantity, settings.weightPrecision)} кг`
+        subtext: formatQuantity(
+          item.quantity,
+          item.stockGroupId ? stockGroupMap.get(item.stockGroupId)?.unit ?? "kg" : productMap.get(item.productId ?? "")?.unit ?? "kg",
+          settings.weightPrecision
+        )
       })),
       ...writeOffs.map((item) => ({
         id: item.id,
@@ -376,8 +468,8 @@ function App() {
           : productViewMap.get(item.productId ?? "")?.displayName ?? "Списание",
         amount: item.costAmount,
         subtext: item.inputMode === "packages" && item.packageCount
-          ? `${formatMoney(item.packageCount)} ${formatPackageLabel(item.packageLabel, item.packageCount)} · ${formatWeight(item.quantity, settings.weightPrecision)} кг`
-          : `${formatWeight(item.quantity, settings.weightPrecision)} кг`
+          ? `${formatMoney(item.packageCount)} ${formatPackageLabel(item.packageLabel, item.packageCount)} · ${formatQuantity(item.quantity, item.stockGroupId ? stockGroupMap.get(item.stockGroupId)?.unit ?? "kg" : productMap.get(item.productId ?? "")?.unit ?? "kg", settings.weightPrecision)}`
+          : formatQuantity(item.quantity, item.stockGroupId ? stockGroupMap.get(item.stockGroupId)?.unit ?? "kg" : productMap.get(item.productId ?? "")?.unit ?? "kg", settings.weightPrecision)
       })),
       ...expenses.map((item) => ({
         id: item.id,
@@ -401,7 +493,7 @@ function App() {
     const days = rangeMap[historyRange];
     const min = Date.now() - days * 24 * 60 * 60 * 1000;
     return rows.filter((row) => (historyRange === "today" ? isToday(row.date) : new Date(row.date).getTime() >= min));
-  }, [expenses, historyRange, productViewMap, receipts, sales, settings.weightPrecision, stockGroups, writeOffs]);
+  }, [expenses, historyRange, productMap, productViewMap, receipts, sales, settings.weightPrecision, stockGroupMap, stockGroups, writeOffs]);
 
   const report = useMemo(() => {
     const periodSales = sales.filter((item) => isInRange(item.date, analyticsRange));
@@ -417,7 +509,14 @@ function App() {
     const purchase = periodReceipts.reduce((sum, item) => sum + item.totalAmount, 0);
     const expensesTotal = periodExpenses.reduce((sum, item) => sum + item.amount, 0);
     const writeOffTotal = periodWriteOffs.reduce((sum, item) => sum + item.costAmount, 0);
-    const writeOffQuantity = periodWriteOffs.reduce((sum, item) => sum + item.quantity, 0);
+    const unitForWriteOff = (item: WriteOff) =>
+      item.stockGroupId ? stockGroupMap.get(item.stockGroupId)?.unit ?? "kg" : productMap.get(item.productId ?? "")?.unit ?? "kg";
+    const writeOffWeightQuantity = periodWriteOffs
+      .filter((item) => unitForWriteOff(item) !== "piece")
+      .reduce((sum, item) => sum + item.quantity, 0);
+    const writeOffPieceQuantity = periodWriteOffs
+      .filter((item) => unitForWriteOff(item) === "piece")
+      .reduce((sum, item) => sum + item.quantity, 0);
     const writeOffPackages = periodWriteOffs.reduce((sum, item) => sum + (item.packageCount ?? 0), 0);
     const cogs = periodSales.reduce((sum, item) => sum + item.costOfGoodsSold, 0);
     const stockValue =
@@ -426,10 +525,11 @@ function App() {
         .filter((item) => !item.stockGroupId && !item.isArchived)
         .reduce((sum, item) => sum + item.currentStock * item.averageCost, 0);
 
-    const topProductMap = new Map<string, { name: string; revenue: number; quantity: number }>();
+    const topProductMap = new Map<string, { name: string; unit: Unit; revenue: number; quantity: number }>();
     for (const sale of periodSales) {
       const current = topProductMap.get(sale.productId) ?? {
         name: productViewMap.get(sale.productId)?.displayName ?? "Товар",
+        unit: productMap.get(sale.productId)?.unit ?? "kg",
         revenue: 0,
         quantity: 0
       };
@@ -440,14 +540,14 @@ function App() {
 
     const topWriteOffMap = new Map<
       string,
-      { name: string; quantity: number; packageCount: number; cost: number; incidents: number }
+      { name: string; unit: Unit; quantity: number; packageCount: number; cost: number; incidents: number }
     >();
     for (const item of periodWriteOffs) {
       const id = item.stockGroupId ? `group:${item.stockGroupId}` : `product:${item.productId ?? "unknown"}`;
       const name = item.stockGroupId
         ? stockGroups.find((group) => group.id === item.stockGroupId)?.name ?? "Партия"
         : productViewMap.get(item.productId ?? "")?.displayName ?? "Товар";
-      const current = topWriteOffMap.get(id) ?? { name, quantity: 0, packageCount: 0, cost: 0, incidents: 0 };
+      const current = topWriteOffMap.get(id) ?? { name, unit: unitForWriteOff(item), quantity: 0, packageCount: 0, cost: 0, incidents: 0 };
       current.quantity += item.quantity;
       current.packageCount += item.packageCount ?? 0;
       current.cost += item.costAmount;
@@ -465,7 +565,8 @@ function App() {
       purchase,
       expenses: expensesTotal,
       writeOffs: writeOffTotal,
-      writeOffQuantity,
+      writeOffWeightQuantity,
+      writeOffPieceQuantity,
       writeOffPackages,
       writeOffIncidents: periodWriteOffs.length,
       cogs,
@@ -480,7 +581,43 @@ function App() {
         .sort((a, b) => b.cost - a.cost)
         .slice(0, 5)
     };
-  }, [analyticsRange, expenses, productViewMap, products, receipts, sales, stockGroups, writeOffs]);
+  }, [analyticsRange, expenses, productMap, productViewMap, products, receipts, sales, stockGroupMap, stockGroups, writeOffs]);
+
+  const shareAnalytics = async () => {
+    if (!activeProfile) {
+      showToast("Сначала выберите профиль");
+      return;
+    }
+    const rangeLabel = { today: "сегодня", "7d": "за 7 дней", "30d": "за 30 дней", all: "за все время" }[
+      analyticsRange
+    ];
+    const text = [
+      `WayYaam · ${activeProfile.name}`,
+      profileLocationLabel(activeProfile),
+      `Отчет ${rangeLabel}`,
+      `По запросам: ${formatMoney(report.requestedRevenue)} ₽`,
+      `Фактически: ${formatMoney(report.revenue)} ₽`,
+      `Разница: ${formatSignedMoney(report.differenceRevenue)}`,
+      `Расходы: ${formatMoney(report.expenses)} ₽`,
+      `Порча: ${formatMoney(report.writeOffs)} ₽`,
+      `Прибыль: ${formatMoney(report.profit)} ₽`
+    ].join("\n");
+
+    try {
+      if (navigator.share) {
+        await navigator.share({ title: `Аналитика · ${activeProfile.name}`, text });
+        showToast("Отчет передан");
+      } else {
+        downloadTextFile(`analytics-${activeProfile.id}-${new Date().toISOString().slice(0, 10)}.txt`, text);
+        showToast("Отчет скачан — им можно поделиться");
+      }
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") {
+        return;
+      }
+      showToast("Не удалось поделиться отчетом");
+    }
+  };
 
   const reservedStockByProduct = useMemo(() => {
     const map = new Map<string, number>();
@@ -505,6 +642,7 @@ function App() {
     !!selectedProduct &&
     saleEditor.requestedAmount > 0 &&
     saleEditor.quantity > 0 &&
+    (!isPieceSelected || Number.isInteger(saleEditor.quantity)) &&
     saleEditor.salePrice > 0 &&
     saleEditor.finalTotalAmount > 0 &&
     saleEditor.differenceAmount >= 0;
@@ -535,8 +673,8 @@ function App() {
     hasUnlimitedStock(product)
       ? "Остаток: без ограничения"
       : product.sharedStockName
-        ? `Общий остаток партии: ${formatWeight(product.availableStock, settings.weightPrecision)} кг`
-        : `Остаток: ${formatWeight(product.availableStock, settings.weightPrecision)} кг`;
+        ? `Общий остаток: ${formatQuantity(product.availableStock, product.unit, settings.weightPrecision)}`
+        : `Остаток: ${formatQuantity(product.availableStock, product.unit, settings.weightPrecision)}`;
 
   const getProductStockMeta = (product: ProductView) =>
     hasUnlimitedStock(product)
@@ -550,7 +688,19 @@ function App() {
       ? "∞"
       : product.sharedStockName
         ? "Общий остаток"
-        : `${formatWeight(product.availableStock, settings.weightPrecision)} кг`;
+        : formatQuantity(product.availableStock, product.unit, settings.weightPrecision);
+
+  const editRequestedAmount = (editor: SaleEditor, value: number) =>
+    isPieceSelected
+      ? editPieceAmount(editor, value, settings.weightPrecision)
+      : editTotal(editor, value, settings.weightPrecision);
+
+  const editSelectedPrice = (editor: SaleEditor, value: number) => {
+    const repriced = editPrice(editor, value, settings.weightPrecision);
+    return isPieceSelected && repriced.mode === "by_amount" && repriced.requestedAmount > 0
+      ? editPieceAmount(repriced, repriced.requestedAmount, settings.weightPrecision)
+      : repriced;
+  };
 
   const resetSale = (product = selectedProduct) => {
     setSaleEditor(createEmptySaleEditor(product));
@@ -582,7 +732,7 @@ function App() {
       title,
       suffix,
       value: String(value || ""),
-      submitLabel: suffix === "кг" ? "кг" : suffix === "₽" ? "₽" : "OK"
+      submitLabel: suffix === "кг" || suffix === "шт" ? suffix : suffix === "₽" ? "₽" : "OK"
     });
   };
 
@@ -596,16 +746,19 @@ function App() {
     const precision = settings.weightPrecision;
 
     if (keypad.field === "quantity") {
-      return editWeight(saleEditor, value, precision);
+      return editWeight(saleEditor, isPieceSelected ? Math.max(0, Math.floor(value)) : value, precision);
     }
     if (keypad.field === "totalAmount") {
-      return editTotal(saleEditor, value, precision);
+      return isPieceSelected ? editPieceAmount(saleEditor, value, precision) : editTotal(saleEditor, value, precision);
     }
     if (keypad.field === "actualAmount") {
       return editActualTotal(saleEditor, value, precision);
     }
     if (keypad.field === "salePrice") {
-      return editPrice(saleEditor, value, precision);
+      const repriced = editPrice(saleEditor, value, precision);
+      return isPieceSelected && repriced.mode === "by_amount" && repriced.requestedAmount > 0
+        ? editPieceAmount(repriced, repriced.requestedAmount, precision)
+        : repriced;
     }
     if (keypad.field === "discountAmount") {
       return applyDiscount(saleEditor, "amount", value, precision);
@@ -618,7 +771,7 @@ function App() {
     }
 
     return saleEditor;
-  }, [keypad, saleEditor, settings.weightPrecision]);
+  }, [isPieceSelected, keypad, saleEditor, settings.weightPrecision]);
 
   const submitKeypad = () => {
     if (!keypad) {
@@ -630,12 +783,16 @@ function App() {
     const precision = settings.weightPrecision;
 
     if (keypad.field === "quantity") {
+      if (isPieceSelected && !Number.isInteger(value)) {
+        showToast("Введите целое количество штук");
+        return;
+      }
       setSaleEditor((current) => editWeight(current, value, precision));
       setToolPanel(null);
     }
 
     if (keypad.field === "totalAmount") {
-      setSaleEditor((current) => editTotal(current, value, precision));
+      setSaleEditor((current) => editRequestedAmount(current, value));
       setToolPanel(null);
     }
 
@@ -649,7 +806,7 @@ function App() {
     }
 
     if (keypad.field === "salePrice") {
-      setSaleEditor((current) => editPrice(current, value, precision));
+      setSaleEditor((current) => editSelectedPrice(current, value));
       setToolPanel(null);
     }
 
@@ -709,10 +866,10 @@ function App() {
     const precision = settings.weightPrecision;
 
     if (button.type === "weight") {
-      setSaleEditor((current) => editWeight(current, button.value, precision));
+      setSaleEditor((current) => editWeight(current, isPieceSelected ? Math.max(1, Math.floor(button.value)) : button.value, precision));
     }
     if (button.type === "amount") {
-      setSaleEditor((current) => editTotal(current, button.value, precision));
+      setSaleEditor((current) => editRequestedAmount(current, button.value));
     }
     if (button.type === "discount") {
       setSaleEditor((current) => applyDiscount(current, "amount", button.value, precision));
@@ -726,11 +883,11 @@ function App() {
       return;
     }
     if (saleEditor.quantity <= 0 || saleEditor.salePrice <= 0 || saleEditor.finalTotalAmount <= 0) {
-      showToast("Проверьте вес, цену и сумму");
+      showToast(isPieceSelected ? "Проверьте количество, цену и сумму" : "Проверьте вес, цену и сумму");
       return;
     }
     if (saleEditor.requestedAmount <= 0) {
-      showToast("Введите запрос клиента в кг или рублях");
+      showToast(isPieceSelected ? "Введите запрос клиента в штуках или рублях" : "Введите запрос клиента в кг или рублях");
       return;
     }
     if (saleEditor.differenceAmount < 0) {
@@ -748,6 +905,7 @@ function App() {
         id: makeId("line"),
         productId: selectedProduct.id,
         productName: selectedProduct.displayName,
+        unit: selectedProduct.unit,
         stockGroupId: selectedProduct.stockGroupId,
         requestedQuantity: saleEditor.requestedQuantity,
         requestedAmount: saleEditor.requestedAmount,
@@ -786,7 +944,9 @@ function App() {
       showToast(
         saleEditor.differenceAmount < 0
           ? "Фактическая сумма должна быть не меньше запроса клиента"
-          : "Проверьте запрос клиента, вес, цену и фактическую сумму"
+          : isPieceSelected
+            ? "Проверьте количество, цену и сумму"
+            : "Проверьте запрос клиента, вес, цену и фактическую сумму"
       );
       return;
     }
@@ -801,6 +961,7 @@ function App() {
         id: makeId("line"),
         productId: selectedProduct.id,
         productName: selectedProduct.displayName,
+        unit: selectedProduct.unit,
         stockGroupId: selectedProduct.stockGroupId,
         requestedQuantity: saleEditor.requestedQuantity,
         requestedAmount: saleEditor.requestedAmount,
@@ -859,7 +1020,7 @@ function App() {
       await db.transaction("rw", db.sales, db.products, db.stockGroups, async () => {
         for (const [groupId, quantity] of groupedStockUsage) {
           const group = await db.stockGroups.get(groupId);
-          if (!group) {
+          if (!group || group.profileId !== activeProfileId) {
             throw new Error("Группа остатка не найдена");
           }
           await db.stockGroups.put({
@@ -871,7 +1032,7 @@ function App() {
 
         for (const [productId, quantity] of groupedProductUsage) {
           const product = await db.products.get(productId);
-          if (!product) {
+          if (!product || product.profileId !== activeProfileId) {
             throw new Error("Товар не найден");
           }
           if (hasUnlimitedStock(product)) {
@@ -891,6 +1052,7 @@ function App() {
 
           await db.sales.add({
             id: makeId("sale"),
+            profileId: activeProfileId,
             saleBatchId: batchId,
             productId: line.productId,
             stockGroupId: line.stockGroupId,
@@ -935,8 +1097,13 @@ function App() {
       showToast("Введите название товара");
       return;
     }
+    if (productDraft.unit === "piece" && !productDraft.isUnlimitedStock && !Number.isInteger(productDraft.currentStock)) {
+      showToast("Для штучного товара укажите целый остаток");
+      return;
+    }
     const payload: Product = {
       ...productDraft,
+      profileId: activeProfileId,
       stockGroupId: productDraft.stockGroupId || undefined,
       currentStock: productDraft.stockGroupId ? 0 : productDraft.currentStock,
       isUnlimitedStock: productDraft.stockGroupId ? false : productDraft.isUnlimitedStock,
@@ -956,8 +1123,13 @@ function App() {
       showToast("Введите название партии");
       return;
     }
+    if (products.some((product) => product.stockGroupId === groupDraft.id && product.unit !== groupDraft.unit)) {
+      showToast("Сначала отвяжите товары с другой единицей");
+      return;
+    }
     await db.stockGroups.put({
       ...groupDraft,
+      profileId: activeProfileId,
       updatedAt: nowIso()
     });
     setGroupDraft(null);
@@ -980,9 +1152,17 @@ function App() {
       showToast("Введите количество и закупочную цену");
       return;
     }
+    const receiptUnit = receiptDraft.targetType === "group"
+      ? stockGroupMap.get(receiptDraft.targetId)?.unit
+      : productMap.get(receiptDraft.targetId)?.unit;
+    if (receiptUnit === "piece" && !Number.isInteger(quantity)) {
+      showToast("Для штучного товара укажите целое количество");
+      return;
+    }
 
     const receipt: ReceiptEntity = {
       id: receiptDraft.id,
+      profileId: activeProfileId,
       stockGroupId: receiptDraft.targetType === "group" ? receiptDraft.targetId : undefined,
       productId: receiptDraft.targetType === "product" ? receiptDraft.targetId : undefined,
       date: receiptDraft.date,
@@ -999,7 +1179,7 @@ function App() {
       await db.receipts.put(receipt);
       if (receipt.stockGroupId) {
         const group = await db.stockGroups.get(receipt.stockGroupId);
-        if (!group) {
+        if (!group || group.profileId !== activeProfileId) {
           throw new Error("Группа не найдена");
         }
         const newStock = group.currentStock + quantity;
@@ -1015,7 +1195,7 @@ function App() {
         });
       } else if (receipt.productId) {
         const product = await db.products.get(receipt.productId);
-        if (!product) {
+        if (!product || product.profileId !== activeProfileId) {
           throw new Error("Товар не найден");
         }
         const newStock = product.currentStock + quantity;
@@ -1062,12 +1242,19 @@ function App() {
       );
       return;
     }
+    const writeOffUnit = writeOffDraft.targetType === "group"
+      ? stockGroupMap.get(writeOffDraft.targetId)?.unit
+      : productMap.get(writeOffDraft.targetId)?.unit;
+    if (writeOffUnit === "piece" && !Number.isInteger(quantity)) {
+      showToast("Для штучного товара укажите целое количество");
+      return;
+    }
 
     try {
       await db.transaction("rw", db.writeOffs, db.stockGroups, db.products, async () => {
         if (writeOffDraft.targetType === "group") {
         const group = await db.stockGroups.get(writeOffDraft.targetId);
-        if (!group || group.currentStock < quantity) {
+        if (!group || group.profileId !== activeProfileId || group.currentStock < quantity) {
           throw new Error("Недостаточно остатка в группе");
         }
         await db.stockGroups.put({
@@ -1077,6 +1264,7 @@ function App() {
         });
         await db.writeOffs.put({
           id: writeOffDraft.id,
+          profileId: activeProfileId,
           stockGroupId: writeOffDraft.targetId,
           date: writeOffDraft.date,
           inputMode: writeOffDraft.inputMode,
@@ -1092,7 +1280,7 @@ function App() {
         });
         } else {
         const product = await db.products.get(writeOffDraft.targetId);
-        if (!product || product.currentStock < quantity) {
+        if (!product || product.profileId !== activeProfileId || product.currentStock < quantity) {
           throw new Error("Недостаточно остатка у товара");
         }
         await db.products.put({
@@ -1102,6 +1290,7 @@ function App() {
         });
         await db.writeOffs.put({
           id: writeOffDraft.id,
+          profileId: activeProfileId,
           productId: writeOffDraft.targetId,
           date: writeOffDraft.date,
           inputMode: writeOffDraft.inputMode,
@@ -1136,6 +1325,7 @@ function App() {
     }
     await db.expenses.put({
       ...expenseDraft,
+      profileId: activeProfileId,
       updatedAt: nowIso()
     });
     setExpenseDraft(null);
@@ -1197,10 +1387,10 @@ function App() {
   };
 
   const clearSalesHistory = async () => {
-    const allSales = await db.sales.toArray();
+    const profileSales = await db.sales.where("profileId").equals(activeProfileId).toArray();
 
     await db.transaction("rw", db.sales, db.products, db.stockGroups, async () => {
-      for (const sale of allSales) {
+      for (const sale of profileSales) {
         if (sale.stockGroupId) {
           const group = await db.stockGroups.get(sale.stockGroupId);
           if (group) {
@@ -1222,7 +1412,7 @@ function App() {
         }
       }
 
-      await db.sales.clear();
+      await db.sales.bulkDelete(profileSales.map((item) => item.id));
     });
 
     resetEntireCheckout(selectedProduct);
@@ -1230,10 +1420,10 @@ function App() {
   };
 
   const clearReceiptsHistory = async () => {
-    const allReceipts = await db.receipts.toArray();
+    const profileReceipts = await db.receipts.where("profileId").equals(activeProfileId).toArray();
 
     await db.transaction("rw", db.receipts, db.products, db.stockGroups, async () => {
-      for (const receipt of allReceipts) {
+      for (const receipt of profileReceipts) {
         if (receipt.stockGroupId) {
           const group = await db.stockGroups.get(receipt.stockGroupId);
           if (group) {
@@ -1255,17 +1445,17 @@ function App() {
         }
       }
 
-      await db.receipts.clear();
+      await db.receipts.bulkDelete(profileReceipts.map((item) => item.id));
     });
 
     showToast("Поступления очищены");
   };
 
   const clearWriteOffsHistory = async () => {
-    const allWriteOffs = await db.writeOffs.toArray();
+    const profileWriteOffs = await db.writeOffs.where("profileId").equals(activeProfileId).toArray();
 
     await db.transaction("rw", db.writeOffs, db.products, db.stockGroups, async () => {
-      for (const writeOff of allWriteOffs) {
+      for (const writeOff of profileWriteOffs) {
         if (writeOff.stockGroupId) {
           const group = await db.stockGroups.get(writeOff.stockGroupId);
           if (group) {
@@ -1287,14 +1477,15 @@ function App() {
         }
       }
 
-      await db.writeOffs.clear();
+      await db.writeOffs.bulkDelete(profileWriteOffs.map((item) => item.id));
     });
 
     showToast("Списания очищены");
   };
 
   const clearExpensesHistory = async () => {
-    await db.expenses.clear();
+    const profileExpenses = await db.expenses.where("profileId").equals(activeProfileId).primaryKeys();
+    await db.expenses.bulkDelete(profileExpenses);
     showToast("Расходы очищены");
   };
 
@@ -1306,14 +1497,21 @@ function App() {
 
   const clearAllData = async () => {
     markDatabaseInitialized();
-    await db.stockGroups.clear();
-    await db.products.clear();
-    await db.receipts.clear();
-    await db.sales.clear();
-    await db.expenses.clear();
-    await db.writeOffs.clear();
-    await db.quickButtonSettings.clear();
-    await db.appSettings.clear();
+    await db.transaction("rw", db.tables, async () => {
+      await Promise.all(db.tables.map((table) => table.clear()));
+      const timestamp = nowIso();
+      await db.storeProfiles.put({
+        id: DEFAULT_PROFILE_ID,
+        name: "Газель №1",
+        city: "Махачкала",
+        marketName: "Восточный базар",
+        pointName: "Точка 12",
+        isArchived: false,
+        createdAt: timestamp,
+        updatedAt: timestamp
+      });
+      await db.appSettings.put({ ...defaultSettings, activeProfileId: DEFAULT_PROFILE_ID, updatedAt: timestamp });
+    });
     resetEntireCheckout(undefined);
     setProductDraft(null);
     setGroupDraft(null);
@@ -1329,6 +1527,39 @@ function App() {
       ...patch,
       updatedAt: nowIso()
     });
+  };
+
+  const selectProfile = async (profileId: string) => {
+    const profile = storeProfiles.find((item) => item.id === profileId && !item.isArchived);
+    if (!profile || profileId === activeProfileId) {
+      return;
+    }
+    await saveSettings({ activeProfileId: profileId });
+    showToast(`Открыт профиль «${profile.name}»`);
+  };
+
+  const saveProfile = async () => {
+    if (!profileDraft) {
+      return;
+    }
+    if (!profileDraft.name.trim() || !profileDraft.city.trim() || !profileDraft.marketName.trim()) {
+      showToast("Заполните название газели, город и базар");
+      return;
+    }
+    const isNew = !storeProfiles.some((profile) => profile.id === profileDraft.id);
+    await db.storeProfiles.put({
+      ...profileDraft,
+      name: profileDraft.name.trim(),
+      city: profileDraft.city.trim(),
+      marketName: profileDraft.marketName.trim(),
+      pointName: profileDraft.pointName.trim(),
+      updatedAt: nowIso()
+    });
+    setProfileDraft(null);
+    if (isNew) {
+      await saveSettings({ activeProfileId: profileDraft.id });
+    }
+    showToast(isNew ? "Профиль газели создан" : "Профиль обновлен");
   };
 
   const addQuickPreset = async (type: "weight" | "amount", rawValue: string) => {
@@ -1380,10 +1611,33 @@ function App() {
   return (
     <div className="app-shell">
       <header className="topbar">
-        <div>
+        <div className="topbar-title">
           <div className="eyebrow">WayYaam касса · смена открыта</div>
           <h1>{screen === "sale" ? "Касса" : screenLabel(screen)}</h1>
         </div>
+        <label className="profile-switcher">
+          <Truck size={20} aria-hidden="true" />
+          <span>
+            <strong>{activeProfile?.name ?? "Профиль газели"}</strong>
+            <small>{profileLocationLabel(activeProfile)}</small>
+          </span>
+          <ChevronDown size={18} aria-hidden="true" />
+          <select
+            aria-label="Выбрать профиль газели"
+            value={activeProfileId}
+            onChange={(event) => void selectProfile(event.target.value)}
+          >
+            {storeProfiles.filter((profile) => !profile.isArchived).map((profile) => (
+              <option key={profile.id} value={profile.id}>
+                {profile.name} — {profile.city} · {profile.marketName}
+              </option>
+            ))}
+          </select>
+        </label>
+        <button className="daily-expense-chip" type="button" onClick={() => setScreen("expenses")}>
+          <span>Расходы сегодня</span>
+          <strong>{formatMoney(todayExpenseTotal)} ₽</strong>
+        </button>
         <button className="icon-button" type="button" aria-label="Сбросить текущий ввод" title="Сбросить текущий ввод" onClick={() => resetSale()}>
           <RotateCcw size={20} />
         </button>
@@ -1437,7 +1691,7 @@ function App() {
                     <span className="product-chip-copy">
                       <span className="product-chip-category">{product.category}</span>
                       <strong>{product.displayName}</strong>
-                      <span className="product-chip-price">{formatMoney(product.defaultSalePrice)} ₽/кг</span>
+                      <span className="product-chip-price">{formatMoney(product.defaultSalePrice)} ₽/{unitLabel(product.unit)}</span>
                       <span className="product-chip-stock">{getProductStockSubtitle(product)}</span>
                     </span>
                   </button>
@@ -1458,17 +1712,17 @@ function App() {
                     {hasUnlimitedStock(selectedProduct)
                       ? "Продажа без ограничения остатка"
                       : selectedProduct?.sharedStockName
-                        ? `Общий остаток группы: ${formatWeight(selectedProduct.availableStock, settings.weightPrecision)} кг`
-                        : `Остаток: ${formatWeight(selectedProduct?.availableStock ?? 0, settings.weightPrecision)} кг`}
+                        ? `Общий остаток: ${formatQuantity(selectedProduct.availableStock, selectedProduct.unit, settings.weightPrecision)}`
+                        : `Остаток: ${formatQuantity(selectedProduct?.availableStock ?? 0, selectedUnit, settings.weightPrecision)}`}
                   </p>
                 </div>
                 <button
                   className="price-badge"
                   type="button"
-                  onClick={() => openKeypad("salePrice", "Цена за кг", saleEditor.salePrice, "₽")}
+                  onClick={() => openKeypad("salePrice", `Цена за ${unitLabel(selectedUnit)}`, saleEditor.salePrice, "₽")}
                 >
                   <span>ЦЕНА</span>
-                  <strong>{formatMoney(saleEditor.salePrice)} ₽/кг</strong>
+                  <strong>{formatMoney(saleEditor.salePrice)} ₽/{unitLabel(selectedUnit)}</strong>
                 </button>
               </div>
 
@@ -1477,15 +1731,15 @@ function App() {
                   <button
                     className={`mode-tile ${saleEditor.mode === "by_weight" ? "active" : ""}`}
                     type="button"
-                    onClick={() => openKeypad("quantity", "Сколько кг просит клиент", saleEditor.requestedQuantity ?? "", "кг")}
+                    onClick={() => openKeypad("quantity", isPieceSelected ? "Сколько штук просит клиент" : "Сколько кг просит клиент", saleEditor.requestedQuantity ?? "", unitLabel(selectedUnit))}
                   >
-                    <span>ПО ВЕСУ</span>
-                    <strong>{saleEditor.requestedQuantity ? `${formatWeight(saleEditor.requestedQuantity, settings.weightPrecision)} кг` : "Ввести кг"}</strong>
+                    <span>{isPieceSelected ? "ПО КОЛИЧЕСТВУ" : "ПО ВЕСУ"}</span>
+                    <strong>{saleEditor.requestedQuantity ? formatQuantity(saleEditor.requestedQuantity, selectedUnit, settings.weightPrecision) : `Ввести ${unitLabel(selectedUnit)}`}</strong>
                   </button>
-                  <div className="mode-presets" aria-label="Быстрый выбор веса">
+                  <div className="mode-presets" aria-label={isPieceSelected ? "Быстрый выбор количества" : "Быстрый выбор веса"}>
                     {weightQuickButtons.map((button) => (
                       <button key={button.id} className="preset-chip" type="button" onClick={() => quickApply(button)}>
-                        {button.label}
+                        {isPieceSelected ? `${formatMoney(Math.max(1, Math.floor(button.value)))} шт` : button.label}
                       </button>
                     ))}
                   </div>
@@ -1515,15 +1769,15 @@ function App() {
                   label="Запрос клиента"
                   value={
                     saleEditor.mode === "by_weight" && saleEditor.requestedQuantity
-                      ? `${formatWeight(saleEditor.requestedQuantity, settings.weightPrecision)} кг = ${formatMoney(saleEditor.requestedAmount)} ₽`
+                      ? `${formatQuantity(saleEditor.requestedQuantity, selectedUnit, settings.weightPrecision)} = ${formatMoney(saleEditor.requestedAmount)} ₽`
                       : `${formatMoney(saleEditor.requestedAmount)} ₽`
                   }
                 />
                 <MetricCard
                   label="Фактически получилось"
                   value={`${formatMoney(saleEditor.finalTotalAmount)} ₽`}
-                  buttonLabel="Ввести результат"
-                  onClick={() => openKeypad("actualAmount", "Сколько получилось", saleEditor.finalTotalAmount, "₽")}
+                  buttonLabel={isPieceSelected ? undefined : "Ввести результат"}
+                  onClick={isPieceSelected ? undefined : () => openKeypad("actualAmount", "Сколько получилось", saleEditor.finalTotalAmount, "₽")}
                   accent="primary"
                 />
                 <MetricCard
@@ -1531,10 +1785,10 @@ function App() {
                   value={formatSignedMoney(saleEditor.differenceAmount)}
                   accent={saleEditor.differenceAmount < 0 ? "danger" : saleEditor.differenceAmount > 0 ? "attention" : undefined}
                 />
-                <MetricCard label="Вес фактически" value={`${formatWeight(saleEditor.quantity, settings.weightPrecision)} кг`} />
+                <MetricCard label={isPieceSelected ? "Количество" : "Вес фактически"} value={formatQuantity(saleEditor.quantity, selectedUnit, settings.weightPrecision)} />
                 <MetricCard
                   label="Цена"
-                  value={`${formatMoney(saleEditor.salePrice)} ₽/кг`}
+                  value={`${formatMoney(saleEditor.salePrice)} ₽/${unitLabel(selectedUnit)}`}
                   onClick={() => openKeypad("salePrice", "Изменить цену", saleEditor.salePrice, "₽")}
                 />
                 {saleEditor.discountAmount ? (
@@ -1610,20 +1864,17 @@ function App() {
                 </Panel>
               )}
 
-              <Panel title="Чек">
+              {saleCart.length > 0 && <Panel title="Чек">
                 <div className="section-header">
                   <h3>Позиции</h3>
                   <strong>{formatMoney(checkoutTotal)} ₽</strong>
                 </div>
-                {saleCart.length === 0 ? (
-                  <EmptyState title="Чек пока пустой" text="Введите запрос клиента, затем точную фактическую сумму и нажмите «В чек». Текущая позиция также продастся по кнопке завершения продажи." />
-                ) : (
                   <div className="list-stack">
                     {saleCart.map((line) => (
                       <ListCard
                         key={line.id}
                         title={line.productName}
-                        subtitle={`${formatWeight(line.quantity, settings.weightPrecision)} кг x ${formatMoney(line.salePrice)} ₽`}
+                        subtitle={`${formatQuantity(line.quantity, line.unit, settings.weightPrecision)} × ${formatMoney(line.salePrice)} ₽`}
                         meta={`Запрос ${formatMoney(line.requestedAmount)} ₽ · разница ${formatSignedMoney(line.differenceAmount)}${line.discountAmount ? ` · скидка ${formatMoney(line.discountAmount)} ₽` : ""}`}
                         side={`${formatMoney(line.finalTotalAmount)} ₽`}
                         actions={
@@ -1634,8 +1885,7 @@ function App() {
                       />
                     ))}
                   </div>
-                )}
-              </Panel>
+              </Panel>}
 
               <NumberPad
                 keypad={keypad}
@@ -1644,6 +1894,7 @@ function App() {
                 weightPrecision={settings.weightPrecision}
                 checkoutTotal={checkoutTotal}
                 receivedAmount={receivedAmount}
+                unit={selectedUnit}
                 onAppend={appendKey}
                 onBackspace={backspaceKey}
                 onClear={clearKeypad}
@@ -1668,7 +1919,7 @@ function App() {
             <Section>
               <div className="section-header">
                 <h2>Товары</h2>
-                <button className="primary-button" type="button" onClick={() => setProductDraft(emptyProductDraft())}>
+                <button className="primary-button" type="button" onClick={() => setProductDraft(emptyProductDraft(activeProfileId))}>
                   <Plus size={18} /> Добавить
                 </button>
               </div>
@@ -1687,6 +1938,24 @@ function App() {
                   <Field label="Категория">
                     <input value={productDraft.category} onChange={(event) => setProductDraft({ ...productDraft, category: event.target.value })} />
                   </Field>
+                  <Field label="Продажа">
+                    <select
+                      value={productDraft.unit}
+                      onChange={(event) => {
+                        const unit = event.target.value as Unit;
+                        setProductDraft({
+                          ...productDraft,
+                          unit,
+                          stockGroupId: stockGroups.some((group) => group.id === productDraft.stockGroupId && group.unit === unit)
+                            ? productDraft.stockGroupId
+                            : undefined
+                        });
+                      }}
+                    >
+                      <option value="kg">По весу, кг</option>
+                      <option value="piece">Поштучно, шт</option>
+                    </select>
+                  </Field>
                   <Field label="Цена продажи">
                     <input inputMode="decimal" value={String(productDraft.defaultSalePrice || "")} onChange={(event) => setProductDraft({ ...productDraft, defaultSalePrice: parseNumber(event.target.value) })} />
                   </Field>
@@ -1702,7 +1971,7 @@ function App() {
                       }
                     >
                       <option value="">Без общей партии</option>
-                      {stockGroups.map((group) => (
+                      {stockGroups.filter((group) => group.unit === productDraft.unit).map((group) => (
                         <option key={group.id} value={group.id}>
                           {group.name}
                         </option>
@@ -1744,7 +2013,7 @@ function App() {
                   <ListCard
                     key={product.id}
                     title={product.displayName}
-                    subtitle={`${formatMoney(product.defaultSalePrice)} ₽/кг`}
+                    subtitle={`${formatMoney(product.defaultSalePrice)} ₽/${unitLabel(product.unit)}`}
                     meta={getProductStockMeta(product)}
                     side={getProductStockSide(product)}
                     actions={
@@ -1778,7 +2047,7 @@ function App() {
           <Section>
             <div className="section-header">
               <h2>Общие партии</h2>
-              <button className="primary-button" type="button" onClick={() => setGroupDraft(emptyGroupDraft())}>
+              <button className="primary-button" type="button" onClick={() => setGroupDraft(emptyGroupDraft(activeProfileId))}>
                 <Plus size={18} /> Добавить
               </button>
             </div>
@@ -1789,6 +2058,12 @@ function App() {
                 </Field>
                 <Field label="Текущий остаток">
                   <input inputMode="decimal" value={String(groupDraft.currentStock || "")} onChange={(event) => setGroupDraft({ ...groupDraft, currentStock: parseNumber(event.target.value) })} />
+                </Field>
+                <Field label="Единица">
+                  <select value={groupDraft.unit} onChange={(event) => setGroupDraft({ ...groupDraft, unit: event.target.value as Unit })}>
+                    <option value="kg">Килограммы</option>
+                    <option value="piece">Штуки</option>
+                  </select>
                 </Field>
                 <Field label="Средняя себестоимость">
                   <input inputMode="decimal" value={String(groupDraft.averageCost || "")} onChange={(event) => setGroupDraft({ ...groupDraft, averageCost: parseNumber(event.target.value) })} />
@@ -1803,9 +2078,9 @@ function App() {
                 <ListCard
                   key={group.id}
                   title={group.name}
-                  subtitle={`Остаток ${formatWeight(group.currentStock, settings.weightPrecision)} кг`}
+                  subtitle={`Остаток ${formatQuantity(group.currentStock, group.unit, settings.weightPrecision)}`}
                   meta={`Связанные товары: ${products.filter((item) => item.stockGroupId === group.id && !item.isArchived).map((item) => [item.name, item.variant].filter(Boolean).join(" ")).join(", ") || "нет"}`}
-                  side={`${formatMoney(group.averageCost)} ₽/кг`}
+                  side={`${formatMoney(group.averageCost)} ₽/${unitLabel(group.unit)}`}
                   actions={
                     <>
                       <button className="ghost-button" type="button" onClick={() => setGroupDraft(group)}>
@@ -1837,7 +2112,7 @@ function App() {
             <Section>
               <div className="section-header">
                 <h2>Поступления</h2>
-                <button className="primary-button" type="button" onClick={() => setReceiptDraft(emptyReceiptDraft())}>
+                <button className="primary-button" type="button" onClick={() => setReceiptDraft(emptyReceiptDraft(activeProfileId))}>
                   <Plus size={18} /> Поступление
                 </button>
               </div>
@@ -1859,7 +2134,7 @@ function App() {
                       ))}
                     </select>
                   </Field>
-                  <Field label="Количество">
+                  <Field label={`Количество, ${unitLabel(receiptDraftUnit)}`}>
                     <input inputMode="decimal" value={receiptDraft.quantity} onChange={(event) => setReceiptDraft({ ...receiptDraft, quantity: event.target.value })} />
                   </Field>
                   <Field label="Цена закупки">
@@ -1881,7 +2156,7 @@ function App() {
                   <ListCard
                     key={receipt.id}
                     title={receipt.stockGroupId ? stockGroups.find((group) => group.id === receipt.stockGroupId)?.name ?? "Партия" : productViewMap.get(receipt.productId ?? "")?.displayName ?? "Товар"}
-                    subtitle={`${formatWeight(receipt.quantity, settings.weightPrecision)} кг x ${formatMoney(receipt.purchasePrice)} ₽`}
+                    subtitle={`${formatQuantity(receipt.quantity, receipt.stockGroupId ? stockGroupMap.get(receipt.stockGroupId)?.unit ?? "kg" : productMap.get(receipt.productId ?? "")?.unit ?? "kg", settings.weightPrecision)} × ${formatMoney(receipt.purchasePrice)} ₽`}
                     meta={`${receipt.source || "Без источника"} · ${formatDateTime(receipt.date)}`}
                     side={`${formatMoney(receipt.totalAmount)} ₽`}
                   />
@@ -1895,7 +2170,7 @@ function App() {
                   <div className="eyebrow">Контроль потерь</div>
                   <h2>Порча и списания</h2>
                 </div>
-                <button className="primary-button" type="button" onClick={() => setWriteOffDraft(emptyWriteOffDraft())}>
+                <button className="primary-button" type="button" onClick={() => setWriteOffDraft(emptyWriteOffDraft(activeProfileId))}>
                   <Plus size={18} /> Зафиксировать порчу
                 </button>
               </div>
@@ -1927,12 +2202,12 @@ function App() {
                         })
                       }
                     >
-                      <option value="weight">По точному весу</option>
+                      <option value="weight">{writeOffDraftUnit === "piece" ? "По количеству" : "По точному весу"}</option>
                       <option value="packages">Мешками / упаковками</option>
                     </select>
                   </Field>
                   {writeOffDraft.inputMode === "weight" ? (
-                    <Field label="Испорчено, кг">
+                    <Field label={`Испорчено, ${unitLabel(writeOffDraftUnit)}`}>
                       <input inputMode="decimal" value={writeOffDraft.quantity} onChange={(event) => setWriteOffDraft({ ...writeOffDraft, quantity: event.target.value })} />
                     </Field>
                   ) : (
@@ -1948,13 +2223,13 @@ function App() {
                       <Field label="Количество упаковок">
                         <input inputMode="decimal" value={writeOffDraft.packageCount} onChange={(event) => setWriteOffDraft({ ...writeOffDraft, packageCount: event.target.value })} />
                       </Field>
-                      <Field label="Вес одной упаковки, кг">
+                      <Field label={`${writeOffDraftUnit === "piece" ? "Количество" : "Вес"} одной упаковки, ${unitLabel(writeOffDraftUnit)}`}>
                         <input inputMode="decimal" value={writeOffDraft.packageWeight} onChange={(event) => setWriteOffDraft({ ...writeOffDraft, packageWeight: event.target.value })} />
                       </Field>
                       <div className="spoilage-preview">
                         <span>Итого будет списано</span>
                         <strong>
-                          {formatWeight(
+                          {formatQuantity(
                             calculateWriteOffQuantity(
                               "packages",
                               0,
@@ -1962,8 +2237,9 @@ function App() {
                               parseNumber(writeOffDraft.packageWeight),
                               settings.weightPrecision
                             ),
+                            writeOffDraftUnit,
                             settings.weightPrecision
-                          )} кг
+                          )}
                         </strong>
                       </div>
                     </>
@@ -1990,8 +2266,8 @@ function App() {
                     title={item.stockGroupId ? stockGroups.find((group) => group.id === item.stockGroupId)?.name ?? "Партия" : productViewMap.get(item.productId ?? "")?.displayName ?? "Товар"}
                     subtitle={
                       item.inputMode === "packages" && item.packageCount
-                        ? `${formatMoney(item.packageCount)} ${formatPackageLabel(item.packageLabel, item.packageCount)} × ${formatWeight(item.packageWeight ?? 0, settings.weightPrecision)} кг = ${formatWeight(item.quantity, settings.weightPrecision)} кг`
-                        : `${formatWeight(item.quantity, settings.weightPrecision)} кг`
+                        ? `${formatMoney(item.packageCount)} ${formatPackageLabel(item.packageLabel, item.packageCount)} × ${formatQuantity(item.packageWeight ?? 0, item.stockGroupId ? stockGroupMap.get(item.stockGroupId)?.unit ?? "kg" : productMap.get(item.productId ?? "")?.unit ?? "kg", settings.weightPrecision)} = ${formatQuantity(item.quantity, item.stockGroupId ? stockGroupMap.get(item.stockGroupId)?.unit ?? "kg" : productMap.get(item.productId ?? "")?.unit ?? "kg", settings.weightPrecision)}`
+                        : formatQuantity(item.quantity, item.stockGroupId ? stockGroupMap.get(item.stockGroupId)?.unit ?? "kg" : productMap.get(item.productId ?? "")?.unit ?? "kg", settings.weightPrecision)
                     }
                     meta={`${item.reason} · ${formatDateTime(item.date)}`}
                     side={`${formatMoney(item.costAmount)} ₽`}
@@ -2007,15 +2283,31 @@ function App() {
         {screen === "expenses" && (
           <Section>
             <div className="section-header">
-              <h2>Расходы</h2>
-              <button className="primary-button" type="button" onClick={() => setExpenseDraft(emptyExpenseDraft())}>
+              <div>
+                <div className="eyebrow">{activeProfile?.name} · {activeProfile?.city}</div>
+                <h2>Ежедневные расходы</h2>
+              </div>
+              <button className="primary-button" type="button" onClick={() => setExpenseDraft(emptyExpenseDraft(activeProfileId))}>
                 <Plus size={18} /> Добавить
               </button>
+            </div>
+            <div className="stats-grid daily-expense-grid">
+              <StatCard icon={<Wallet size={20} />} label="Всего сегодня" value={`${formatMoney(todayExpenseTotal)} ₽`} />
+              <StatCard icon={<Store size={20} />} label="Аренда" value={`${formatMoney(todayExpenseByCategory["Аренда"] ?? 0)} ₽`} />
+              <StatCard icon={<Receipt size={20} />} label="Обед" value={`${formatMoney(todayExpenseByCategory["Обед"] ?? 0)} ₽`} />
+              <StatCard icon={<Truck size={20} />} label="Транспорт" value={`${formatMoney(todayExpenseByCategory["Транспорт"] ?? 0)} ₽`} />
             </div>
             {expenseDraft && (
               <EditorCard title="Расход" onCancel={() => setExpenseDraft(null)} onSave={() => void saveExpense()}>
                 <Field label="Категория">
-                  <input value={expenseDraft.category} onChange={(event) => setExpenseDraft({ ...expenseDraft, category: event.target.value })} />
+                  <select value={expenseDraft.category} onChange={(event) => setExpenseDraft({ ...expenseDraft, category: event.target.value })}>
+                    <option value="Аренда">Аренда места</option>
+                    <option value="Обед">Обед</option>
+                    <option value="Транспорт">Транспорт / топливо</option>
+                    <option value="Погрузка">Погрузка / разгрузка</option>
+                    <option value="Упаковка">Пакеты и упаковка</option>
+                    <option value="Прочее">Прочее</option>
+                  </select>
                 </Field>
                 <Field label="Сумма">
                   <input inputMode="decimal" value={String(expenseDraft.amount || "")} onChange={(event) => setExpenseDraft({ ...expenseDraft, amount: parseNumber(event.target.value) })} />
@@ -2107,22 +2399,27 @@ function App() {
                   <div className="eyebrow">По локальным данным</div>
                   <h2>Аналитика</h2>
                 </div>
-                <div className="range-row">
-                  {[
-                    ["today", "Сегодня"],
-                    ["7d", "7 дней"],
-                    ["30d", "30 дней"],
-                    ["all", "Все"]
-                  ].map(([value, label]) => (
-                    <button
-                      key={value}
-                      className={`range-chip ${analyticsRange === value ? "active" : ""}`}
-                      type="button"
-                      onClick={() => setAnalyticsRange(value as "today" | "7d" | "30d" | "all")}
-                    >
-                      {label}
-                    </button>
-                  ))}
+                <div className="analytics-actions">
+                  <button className="secondary-button compact-button" type="button" onClick={() => void shareAnalytics()}>
+                    <Share2 size={17} /> Поделиться
+                  </button>
+                  <div className="range-row">
+                    {[
+                      ["today", "Сегодня"],
+                      ["7d", "7 дней"],
+                      ["30d", "30 дней"],
+                      ["all", "Все"]
+                    ].map(([value, label]) => (
+                      <button
+                        key={value}
+                        className={`range-chip ${analyticsRange === value ? "active" : ""}`}
+                        type="button"
+                        onClick={() => setAnalyticsRange(value as "today" | "7d" | "30d" | "all")}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               </div>
               <div className="stats-grid">
@@ -2152,7 +2449,10 @@ function App() {
               </div>
               <div className="stats-grid spoilage-stats">
                 <StatCard icon={<Archive size={20} />} label="Случаев" value={String(report.writeOffIncidents)} />
-                <StatCard icon={<Boxes size={20} />} label="Испорчено" value={`${formatWeight(report.writeOffQuantity, settings.weightPrecision)} кг`} />
+                <StatCard icon={<Boxes size={20} />} label="Испорчено, кг" value={formatWeight(report.writeOffWeightQuantity, settings.weightPrecision)} />
+                {report.writeOffPieceQuantity > 0 ? (
+                  <StatCard icon={<Package size={20} />} label="Испорчено, шт" value={formatMoney(report.writeOffPieceQuantity)} />
+                ) : null}
                 <StatCard icon={<Package size={20} />} label="Упаковок / мешков" value={formatMoney(report.writeOffPackages)} />
                 <StatCard icon={<Wallet size={20} />} label="Потери" value={`${formatMoney(report.writeOffs)} ₽`} />
               </div>
@@ -2164,7 +2464,7 @@ function App() {
                     <ListCard
                       key={item.id}
                       title={item.name}
-                      subtitle={`${formatWeight(item.quantity, settings.weightPrecision)} кг${item.packageCount > 0 ? ` · ${formatMoney(item.packageCount)} уп.` : ""}`}
+                      subtitle={`${formatQuantity(item.quantity, item.unit, settings.weightPrecision)}${item.packageCount > 0 ? ` · ${formatMoney(item.packageCount)} уп.` : ""}`}
                       meta={`${formatCountWithNoun(item.incidents, ["случай", "случая", "случаев"])} за выбранный период`}
                       side={`${formatMoney(item.cost)} ₽`}
                     />
@@ -2186,7 +2486,7 @@ function App() {
                     <ListCard
                       key={product.id}
                       title={`${index + 1}. ${product.name}`}
-                      subtitle={`${formatWeight(product.quantity, settings.weightPrecision)} кг`}
+                      subtitle={formatQuantity(product.quantity, product.unit, settings.weightPrecision)}
                       meta="Продажи за выбранный период"
                       side={`${formatMoney(product.revenue)} ₽`}
                     />
@@ -2205,7 +2505,7 @@ function App() {
                   <ListCard
                     key={product.id}
                     title={product.displayName}
-                    subtitle={`${formatMoney(product.defaultSalePrice)} ₽/кг`}
+                    subtitle={`${formatMoney(product.defaultSalePrice)} ₽/${unitLabel(product.unit)}`}
                     meta={getProductStockSubtitle(product)}
                     side={getProductStockSide(product)}
                   />
@@ -2217,6 +2517,56 @@ function App() {
 
         {screen === "settings" && (
           <>
+            <Section>
+              <div className="section-header">
+                <div>
+                  <div className="eyebrow">Отдельные каталоги и отчеты</div>
+                  <h2>Профили газелей</h2>
+                </div>
+                <button className="primary-button" type="button" onClick={() => setProfileDraft(emptyProfileDraft())}>
+                  <Plus size={18} /> Профиль
+                </button>
+              </div>
+              {profileDraft && (
+                <EditorCard title="Профиль точки" onCancel={() => setProfileDraft(null)} onSave={() => void saveProfile()}>
+                  <Field label="Название профиля / газели">
+                    <input value={profileDraft.name} placeholder="Например, Газель №3" onChange={(event) => setProfileDraft({ ...profileDraft, name: event.target.value })} />
+                  </Field>
+                  <Field label="Город базара">
+                    <input list="bazaar-city-options" value={profileDraft.city} onChange={(event) => setProfileDraft({ ...profileDraft, city: event.target.value })} />
+                    <datalist id="bazaar-city-options">
+                      {bazaarCities.map((city) => <option key={city} value={city} />)}
+                    </datalist>
+                  </Field>
+                  <Field label="Название базара">
+                    <input value={profileDraft.marketName} placeholder="Например, Восточный базар" onChange={(event) => setProfileDraft({ ...profileDraft, marketName: event.target.value })} />
+                  </Field>
+                  <Field label="Точка / ряд">
+                    <input value={profileDraft.pointName} placeholder="Например, Ряд 4 · точка 7" onChange={(event) => setProfileDraft({ ...profileDraft, pointName: event.target.value })} />
+                  </Field>
+                </EditorCard>
+              )}
+              <div className="profile-card-grid">
+                {storeProfiles.filter((profile) => !profile.isArchived).map((profile) => (
+                  <article key={profile.id} className={`profile-card ${profile.id === activeProfileId ? "active" : ""}`}>
+                    <div className="profile-card-icon"><Truck size={22} /></div>
+                    <div className="profile-card-copy">
+                      <h3>{profile.name}</h3>
+                      <p><MapPin size={15} /> {profileLocationLabel(profile)}</p>
+                    </div>
+                    <div className="card-actions">
+                      {profile.id !== activeProfileId ? (
+                        <button className="secondary-button compact-button" type="button" onClick={() => void selectProfile(profile.id)}>Открыть</button>
+                      ) : (
+                        <span className="active-profile-badge"><Check size={15} /> Сейчас открыт</span>
+                      )}
+                      <button className="ghost-button compact-button" type="button" onClick={() => setProfileDraft({ ...profile })}>Изменить</button>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            </Section>
+
             <Section>
               <div className="section-header">
                 <h2>Настройки</h2>
@@ -2238,9 +2588,9 @@ function App() {
                 <div className="preset-settings">
                   <div>
                     <h3>Быстрые значения</h3>
-                    <p className="muted">Они появятся сразу под режимами «По весу» и «На сумму».</p>
+                    <p className="muted">Для штучного товара те же значения показываются в штуках.</p>
                   </div>
-                  <Field label="Добавить вес, кг">
+                  <Field label="Добавить вес / количество">
                     <div className="inline-add-row">
                       <input
                         inputMode="decimal"
@@ -2467,7 +2817,7 @@ function App() {
           <span className="nav-brand-mark"><Store size={22} /></span>
           <span>
             <strong>WayYaam</strong>
-            <small>касса магазина</small>
+            <small>{activeProfile?.name ?? "касса магазина"}</small>
           </span>
         </div>
         {screens.map((item) => {
@@ -2486,7 +2836,7 @@ function App() {
         })}
         <div className="nav-shift">
           <span className="shift-dot" />
-          <span><strong>Смена открыта</strong><small>Локальный режим</small></span>
+          <span><strong>Смена открыта</strong><small>{activeProfile?.city ?? "Локальный режим"}</small></span>
         </div>
       </nav>
 
@@ -2663,6 +3013,7 @@ function NumberPad({
   weightPrecision,
   checkoutTotal,
   receivedAmount,
+  unit,
   onAppend,
   onBackspace,
   onClear,
@@ -2675,6 +3026,7 @@ function NumberPad({
   weightPrecision: number;
   checkoutTotal: number;
   receivedAmount: number;
+  unit: Unit;
   onAppend: (key: string) => void;
   onBackspace: () => void;
   onClear: () => void;
@@ -2702,11 +3054,11 @@ function NumberPad({
         <div className="pad-live-summary">
           <div className="pad-live-row">
             <span>Цена</span>
-            <strong>{formatMoney(preview.salePrice)} ₽/кг</strong>
+            <strong>{formatMoney(preview.salePrice)} ₽/{unitLabel(unit)}</strong>
           </div>
           <div className="pad-live-row emphasis">
-            <span>Вес фактически</span>
-            <strong>{formatWeight(preview.quantity, weightPrecision)} кг</strong>
+            <span>{unit === "piece" ? "Количество" : "Вес фактически"}</span>
+            <strong>{formatQuantity(preview.quantity, unit, weightPrecision)}</strong>
           </div>
           <div className="pad-live-row emphasis">
             <span>Запрос клиента</span>

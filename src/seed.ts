@@ -6,15 +6,32 @@ import type {
   QuickButtonSetting,
   Receipt,
   Sale,
+  StoreProfile,
   StockGroup,
   WriteOff
 } from "./types";
 import { nowIso } from "./utils";
+import { createDefaultProfile, DEFAULT_PROFILE_ID } from "./profiles";
 
 const initializedKey = "market-db-initialized";
 const demoRequestedKey = "market-db-demo-requested";
 
 const timestamp = nowIso();
+const secondProfileId = "profile_gazelle_2";
+
+const storeProfiles: StoreProfile[] = [
+  createDefaultProfile(timestamp),
+  {
+    id: secondProfileId,
+    name: "Газель №2",
+    city: "Астрахань",
+    marketName: "Большие Исады",
+    pointName: "Ряд 4 · точка 7",
+    isArchived: false,
+    createdAt: timestamp,
+    updatedAt: timestamp
+  }
+];
 
 const stockGroupId = "group_bolgarka";
 const productIds = {
@@ -22,12 +39,16 @@ const productIds = {
   pepperGreen: "product_pepper_green",
   pepperMix: "product_pepper_mix",
   tomato: "product_tomato",
-  cucumber: "product_cucumber"
+  cucumber: "product_cucumber",
+  watermelonPiece: "product_watermelon_piece",
+  cucumberSecond: "product_cucumber_gazelle_2",
+  tomatoSecond: "product_tomato_gazelle_2"
 };
 
 const stockGroups: StockGroup[] = [
   {
     id: stockGroupId,
+    profileId: DEFAULT_PROFILE_ID,
     name: "Болгарка общая партия",
     unit: "kg",
     currentStock: 91.92,
@@ -41,6 +62,7 @@ const stockGroups: StockGroup[] = [
 const products: Product[] = [
   {
     id: productIds.pepperRed,
+    profileId: DEFAULT_PROFILE_ID,
     name: "Болгарка",
     variant: "красный",
     category: "Овощи",
@@ -57,6 +79,7 @@ const products: Product[] = [
   },
   {
     id: productIds.pepperGreen,
+    profileId: DEFAULT_PROFILE_ID,
     name: "Болгарка",
     variant: "зеленый",
     category: "Овощи",
@@ -73,6 +96,7 @@ const products: Product[] = [
   },
   {
     id: productIds.pepperMix,
+    profileId: DEFAULT_PROFILE_ID,
     name: "Болгарка",
     variant: "смешанный",
     category: "Овощи",
@@ -89,6 +113,7 @@ const products: Product[] = [
   },
   {
     id: productIds.tomato,
+    profileId: DEFAULT_PROFILE_ID,
     name: "Помидор",
     variant: "",
     category: "Овощи",
@@ -104,6 +129,7 @@ const products: Product[] = [
   },
   {
     id: productIds.cucumber,
+    profileId: DEFAULT_PROFILE_ID,
     name: "Огурец",
     variant: "",
     category: "Овощи",
@@ -116,12 +142,61 @@ const products: Product[] = [
     isArchived: false,
     createdAt: timestamp,
     updatedAt: timestamp
+  },
+  {
+    id: productIds.cucumberSecond,
+    profileId: secondProfileId,
+    name: "Огурец",
+    variant: "",
+    category: "Овощи",
+    unit: "kg",
+    currentStock: 40,
+    isUnlimitedStock: false,
+    averageCost: 35,
+    defaultSalePrice: 65,
+    notes: "Закупка для второй газели",
+    isArchived: false,
+    createdAt: timestamp,
+    updatedAt: timestamp
+  },
+  {
+    id: productIds.watermelonPiece,
+    profileId: DEFAULT_PROFILE_ID,
+    name: "Арбуз",
+    variant: "штучный",
+    category: "Фрукты",
+    unit: "piece",
+    currentStock: 20,
+    isUnlimitedStock: false,
+    averageCost: 60,
+    defaultSalePrice: 90,
+    notes: "Продажа целыми штуками",
+    isArchived: false,
+    createdAt: timestamp,
+    updatedAt: timestamp
+  },
+  {
+    id: productIds.tomatoSecond,
+    profileId: secondProfileId,
+    name: "Помидор",
+    variant: "розовый",
+    category: "Овощи",
+    unit: "kg",
+    currentStock: 25,
+    isUnlimitedStock: false,
+    averageCost: 50,
+    defaultSalePrice: 85,
+    notes: "Отдельная цена второй точки",
+    isArchived: false,
+    createdAt: timestamp,
+    updatedAt: timestamp
   }
 ];
 
 const receipts: Receipt[] = [
   {
     id: "receipt_group_main",
+    profileId: DEFAULT_PROFILE_ID,
     stockGroupId,
     date: timestamp,
     quantity: 100,
@@ -134,6 +209,7 @@ const receipts: Receipt[] = [
   },
   {
     id: "receipt_tomato",
+    profileId: DEFAULT_PROFILE_ID,
     productId: productIds.tomato,
     date: timestamp,
     quantity: 60,
@@ -146,6 +222,7 @@ const receipts: Receipt[] = [
   },
   {
     id: "receipt_cucumber",
+    profileId: DEFAULT_PROFILE_ID,
     productId: productIds.cucumber,
     date: timestamp,
     quantity: 35,
@@ -155,12 +232,52 @@ const receipts: Receipt[] = [
     comment: "",
     createdAt: timestamp,
     updatedAt: timestamp
+  },
+  {
+    id: "receipt_cucumber_gazelle_2",
+    profileId: secondProfileId,
+    productId: productIds.cucumberSecond,
+    date: timestamp,
+    quantity: 40,
+    purchasePrice: 35,
+    totalAmount: 1400,
+    source: "Оптовая база",
+    comment: "Закупка второй газели",
+    createdAt: timestamp,
+    updatedAt: timestamp
+  },
+  {
+    id: "receipt_watermelon_piece",
+    profileId: DEFAULT_PROFILE_ID,
+    productId: productIds.watermelonPiece,
+    date: timestamp,
+    quantity: 20,
+    purchasePrice: 60,
+    totalAmount: 1200,
+    source: "Оптовая база",
+    comment: "Штучный товар",
+    createdAt: timestamp,
+    updatedAt: timestamp
+  },
+  {
+    id: "receipt_tomato_gazelle_2",
+    profileId: secondProfileId,
+    productId: productIds.tomatoSecond,
+    date: timestamp,
+    quantity: 25,
+    purchasePrice: 50,
+    totalAmount: 1250,
+    source: "Фермер",
+    comment: "Закупка второй газели",
+    createdAt: timestamp,
+    updatedAt: timestamp
   }
 ];
 
 const sales: Sale[] = [
   {
     id: "sale_pepper_mix",
+    profileId: DEFAULT_PROFILE_ID,
     productId: productIds.pepperGreen,
     stockGroupId,
     date: timestamp,
@@ -180,6 +297,7 @@ const sales: Sale[] = [
   },
   {
     id: "sale_pepper_red",
+    profileId: DEFAULT_PROFILE_ID,
     productId: productIds.pepperRed,
     stockGroupId,
     date: timestamp,
@@ -202,6 +320,7 @@ const sales: Sale[] = [
   },
   {
     id: "sale_tomato",
+    profileId: DEFAULT_PROFILE_ID,
     productId: productIds.tomato,
     date: timestamp,
     requestedQuantity: 12,
@@ -224,8 +343,9 @@ const sales: Sale[] = [
 const expenses: Expense[] = [
   {
     id: "expense_market_fee",
+    profileId: DEFAULT_PROFILE_ID,
     date: timestamp,
-    category: "Место",
+    category: "Аренда",
     amount: 700,
     comment: "Дневная аренда",
     createdAt: timestamp,
@@ -233,10 +353,21 @@ const expenses: Expense[] = [
   },
   {
     id: "expense_fuel",
+    profileId: DEFAULT_PROFILE_ID,
     date: timestamp,
     category: "Транспорт",
     amount: 950,
     comment: "Доставка товара",
+    createdAt: timestamp,
+    updatedAt: timestamp
+  },
+  {
+    id: "expense_lunch_gazelle_2",
+    profileId: secondProfileId,
+    date: timestamp,
+    category: "Обед",
+    amount: 650,
+    comment: "Обед бригады",
     createdAt: timestamp,
     updatedAt: timestamp
   }
@@ -245,6 +376,7 @@ const expenses: Expense[] = [
 const writeOffs: WriteOff[] = [
   {
     id: "writeoff_cucumber",
+    profileId: DEFAULT_PROFILE_ID,
     productId: productIds.cucumber,
     date: timestamp,
     inputMode: "weight",
@@ -257,6 +389,7 @@ const writeOffs: WriteOff[] = [
   },
   {
     id: "writeoff_group",
+    profileId: DEFAULT_PROFILE_ID,
     stockGroupId,
     date: timestamp,
     inputMode: "packages",
@@ -294,6 +427,7 @@ const quickButtons: QuickButtonSetting[] = quickButtonsSeed.map(([type, value, l
 const appSettings: AppSettings[] = [
   {
     id: "main",
+    activeProfileId: DEFAULT_PROFILE_ID,
     theme: "light",
     weightPrecision: 2,
     currencySymbol: "₽",
@@ -339,6 +473,7 @@ const seedDatabaseOnce = async () => {
   }
 
   await db.transaction("rw", db.tables, async () => {
+    await db.storeProfiles.bulkPut(storeProfiles);
     await db.stockGroups.bulkPut(stockGroups);
     await db.products.bulkPut(products);
     await db.receipts.bulkPut(receipts);

@@ -1,8 +1,10 @@
 import type { AppSnapshot } from "../types";
+import { createDefaultProfile, DEFAULT_PROFILE_ID } from "../profiles";
 
 type JsonRecord = Record<string, unknown>;
 
 const collections = [
+  "storeProfiles",
   "stockGroups",
   "products",
   "receipts",
@@ -126,10 +128,11 @@ export const parseSnapshot = (value: unknown): AppSnapshot => {
   if (!isRecord(value)) {
     fail("файл", "ожидался JSON-объект");
   }
-  const root = value as JsonRecord;
-  if (root.schemaVersion !== undefined && (typeof root.schemaVersion !== "number" || root.schemaVersion > 2)) {
+  const inputRoot = value as JsonRecord;
+  if (inputRoot.schemaVersion !== undefined && (typeof inputRoot.schemaVersion !== "number" || inputRoot.schemaVersion > 3)) {
     fail("schemaVersion", "версия файла новее поддерживаемой");
   }
+  const root = normalizeLegacySnapshot(inputRoot);
 
   const rows = Object.fromEntries(collections.map((name) => [name, requireRows(root, name)])) as Record<
     (typeof collections)[number],
@@ -141,9 +144,32 @@ export const parseSnapshot = (value: unknown): AppSnapshot => {
     Set<string>
   >;
 
+  rows.storeProfiles.forEach((row, index) => {
+    const path = `storeProfiles[${index}]`;
+    validateCommon(row, path);
+    requireString(row, "name", path, false);
+    requireString(row, "city", path, false);
+    requireString(row, "marketName", path, false);
+    requireString(row, "pointName", path);
+    requireBoolean(row, "isArchived", path);
+  });
+
+  const requireProfile = (row: JsonRecord, path: string) => {
+    const profileId = requireString(row, "profileId", path, false);
+    if (!ids.storeProfiles.has(profileId)) {
+      fail(`${path}.profileId`, "профиль не найден");
+    }
+    return profileId;
+  };
+
+  const stockGroupProfiles = new Map<string, string>();
+  const productProfiles = new Map<string, string>();
+
   rows.stockGroups.forEach((row, index) => {
     const path = `stockGroups[${index}]`;
     validateCommon(row, path);
+    const profileId = requireProfile(row, path);
+    stockGroupProfiles.set(requireString(row, "id", path, false), profileId);
     requireString(row, "name", path, false);
     requireEnum(row, "unit", units, path);
     requireNumber(row, "currentStock", path);
@@ -154,6 +180,8 @@ export const parseSnapshot = (value: unknown): AppSnapshot => {
   rows.products.forEach((row, index) => {
     const path = `products[${index}]`;
     validateCommon(row, path);
+    const profileId = requireProfile(row, path);
+    productProfiles.set(requireString(row, "id", path, false), profileId);
     requireString(row, "name", path, false);
     requireString(row, "variant", path);
     requireString(row, "category", path, false);
@@ -168,11 +196,15 @@ export const parseSnapshot = (value: unknown): AppSnapshot => {
     if (stockGroupId && !ids.stockGroups.has(stockGroupId)) {
       fail(`${path}.stockGroupId`, "партия не найдена");
     }
+    if (stockGroupId && stockGroupProfiles.get(stockGroupId) !== profileId) {
+      fail(`${path}.stockGroupId`, "партия принадлежит другому профилю");
+    }
   });
 
   rows.receipts.forEach((row, index) => {
     const path = `receipts[${index}]`;
     validateCommon(row, path);
+    const profileId = requireProfile(row, path);
     requireString(row, "date", path, false);
     requireNumber(row, "quantity", path, { positive: true });
     requireNumber(row, "purchasePrice", path, { positive: true });
@@ -180,18 +212,26 @@ export const parseSnapshot = (value: unknown): AppSnapshot => {
     requireString(row, "source", path);
     requireString(row, "comment", path);
     validateTarget(row, path, ids.stockGroups, ids.products);
+    validateTargetProfile(row, path, profileId, stockGroupProfiles, productProfiles);
   });
 
   rows.sales.forEach((row, index) => {
     const path = `sales[${index}]`;
     validateCommon(row, path);
+    const profileId = requireProfile(row, path);
     const productId = requireString(row, "productId", path, false);
     if (!ids.products.has(productId)) {
       fail(`${path}.productId`, "товар не найден");
     }
+    if (productProfiles.get(productId) !== profileId) {
+      fail(`${path}.productId`, "товар принадлежит другому профилю");
+    }
     const stockGroupId = optionalString(row, "stockGroupId", path);
     if (stockGroupId && !ids.stockGroups.has(stockGroupId)) {
       fail(`${path}.stockGroupId`, "партия не найдена");
+    }
+    if (stockGroupId && stockGroupProfiles.get(stockGroupId) !== profileId) {
+      fail(`${path}.stockGroupId`, "партия принадлежит другому профилю");
     }
     optionalString(row, "saleBatchId", path);
     requireString(row, "date", path, false);
@@ -217,6 +257,7 @@ export const parseSnapshot = (value: unknown): AppSnapshot => {
   rows.expenses.forEach((row, index) => {
     const path = `expenses[${index}]`;
     validateCommon(row, path);
+    requireProfile(row, path);
     requireString(row, "date", path, false);
     requireString(row, "category", path, false);
     requireNumber(row, "amount", path, { positive: true });
@@ -226,6 +267,7 @@ export const parseSnapshot = (value: unknown): AppSnapshot => {
   rows.writeOffs.forEach((row, index) => {
     const path = `writeOffs[${index}]`;
     validateCommon(row, path);
+    const profileId = requireProfile(row, path);
     requireString(row, "date", path, false);
     const inputMode = optionalString(row, "inputMode", path);
     if (inputMode && !new Set(["weight", "packages"]).has(inputMode)) {
@@ -242,6 +284,7 @@ export const parseSnapshot = (value: unknown): AppSnapshot => {
     requireString(row, "comment", path);
     requireNumber(row, "costAmount", path);
     validateTarget(row, path, ids.stockGroups, ids.products);
+    validateTargetProfile(row, path, profileId, stockGroupProfiles, productProfiles);
   });
 
   rows.quickButtonSettings.forEach((row, index) => {
@@ -256,14 +299,19 @@ export const parseSnapshot = (value: unknown): AppSnapshot => {
   rows.appSettings.forEach((row, index) => {
     const path = `appSettings[${index}]`;
     validateCommon(row, path);
+    const activeProfileId = requireString(row, "activeProfileId", path, false);
+    if (!ids.storeProfiles.has(activeProfileId)) {
+      fail(`${path}.activeProfileId`, "профиль не найден");
+    }
     requireEnum(row, "theme", new Set(["light", "contrast"]), path);
     requireNumber(row, "weightPrecision", path);
     requireString(row, "currencySymbol", path, false);
   });
 
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     exportedAt: typeof root.exportedAt === "string" ? root.exportedAt : new Date().toISOString(),
+    storeProfiles: rows.storeProfiles,
     stockGroups: rows.stockGroups,
     products: rows.products,
     receipts: rows.receipts,
@@ -274,6 +322,39 @@ export const parseSnapshot = (value: unknown): AppSnapshot => {
     appSettings: rows.appSettings
   } as unknown as AppSnapshot;
 };
+
+function normalizeLegacySnapshot(root: JsonRecord): JsonRecord {
+  const version = typeof root.schemaVersion === "number" ? root.schemaVersion : 1;
+  if (version >= 3) {
+    return root;
+  }
+
+  const timestamp = typeof root.exportedAt === "string" ? root.exportedAt : new Date().toISOString();
+  const tenantCollections = ["stockGroups", "products", "receipts", "sales", "expenses", "writeOffs"];
+  const migrated: JsonRecord = {
+    ...root,
+    schemaVersion: 3,
+    storeProfiles: [createDefaultProfile(timestamp)]
+  };
+
+  for (const collection of tenantCollections) {
+    if (!Array.isArray(root[collection])) {
+      continue;
+    }
+    const rows = root[collection] as unknown[];
+    migrated[collection] = rows.map((row) =>
+      isRecord(row) ? { ...row, profileId: typeof row.profileId === "string" ? row.profileId : DEFAULT_PROFILE_ID } : row
+    );
+  }
+
+  const settingsRows = Array.isArray(root.appSettings) ? (root.appSettings as unknown[]) : [];
+  migrated.appSettings = settingsRows.map((row) =>
+    isRecord(row)
+      ? { ...row, activeProfileId: typeof row.activeProfileId === "string" ? row.activeProfileId : DEFAULT_PROFILE_ID }
+      : row
+  );
+  return migrated;
+}
 
 function validateTarget(
   row: JsonRecord,
@@ -291,5 +372,22 @@ function validateTarget(
   }
   if (productId && !productIds.has(productId)) {
     fail(`${path}.productId`, "товар не найден");
+  }
+}
+
+function validateTargetProfile(
+  row: JsonRecord,
+  path: string,
+  profileId: string,
+  stockGroupProfiles: Map<string, string>,
+  productProfiles: Map<string, string>
+) {
+  const stockGroupId = optionalString(row, "stockGroupId", path);
+  const productId = optionalString(row, "productId", path);
+  if (stockGroupId && stockGroupProfiles.get(stockGroupId) !== profileId) {
+    fail(`${path}.stockGroupId`, "партия принадлежит другому профилю");
+  }
+  if (productId && productProfiles.get(productId) !== profileId) {
+    fail(`${path}.productId`, "товар принадлежит другому профилю");
   }
 }

@@ -16,7 +16,9 @@ describe("проверка импортируемого снимка", () => {
   it("принимает старый снимок без метаданных и добавляет актуальную версию", () => {
     const result = parseSnapshot(emptySnapshot());
 
-    expect(result.schemaVersion).toBe(2);
+    expect(result.schemaVersion).toBe(3);
+    expect(result.storeProfiles).toHaveLength(1);
+    expect(result.appSettings).toHaveLength(0);
     expect(result.exportedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
   });
 
@@ -76,5 +78,58 @@ describe("проверка импортируемого снимка", () => {
     ];
 
     expect(() => parseSnapshot(snapshot)).toThrow("партия не найдена");
+  });
+
+  it("не разрешает операции ссылаться на товар другого профиля", () => {
+    const timestamp = "2026-08-22T00:00:00.000Z";
+    const snapshot = {
+      ...emptySnapshot(),
+      schemaVersion: 3,
+      exportedAt: timestamp,
+      storeProfiles: ["profile_1", "profile_2"].map((id, index) => ({
+        id,
+        name: `Газель №${index + 1}`,
+        city: "Махачкала",
+        marketName: "Базар",
+        pointName: "",
+        isArchived: false,
+        createdAt: timestamp,
+        updatedAt: timestamp
+      }))
+    };
+    snapshot.products = [
+      {
+        id: "product_1",
+        profileId: "profile_1",
+        name: "Арбуз",
+        variant: "",
+        category: "Фрукты",
+        unit: "piece",
+        currentStock: 20,
+        averageCost: 60,
+        defaultSalePrice: 90,
+        notes: "",
+        isArchived: false,
+        createdAt: timestamp,
+        updatedAt: timestamp
+      }
+    ];
+    snapshot.receipts = [
+      {
+        id: "receipt_1",
+        profileId: "profile_2",
+        productId: "product_1",
+        date: timestamp,
+        quantity: 5,
+        purchasePrice: 60,
+        totalAmount: 300,
+        source: "",
+        comment: "",
+        createdAt: timestamp,
+        updatedAt: timestamp
+      }
+    ];
+
+    expect(() => parseSnapshot(snapshot)).toThrow("товар принадлежит другому профилю");
   });
 });

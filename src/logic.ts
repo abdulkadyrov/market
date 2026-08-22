@@ -1,5 +1,6 @@
 import type { AppSettings, BaseField, DiscountType, ProductView, SaleMode } from "./types";
 import { toMoney, toWeight } from "./utils";
+import { DEFAULT_PROFILE_ID } from "./profiles";
 
 export interface SaleEditor {
   requestedQuantity?: number;
@@ -21,6 +22,7 @@ export interface SaleEditor {
 
 export const defaultSettings: AppSettings = {
   id: "main",
+  activeProfileId: DEFAULT_PROFILE_ID,
   theme: "light",
   weightPrecision: 2,
   currencySymbol: "₽",
@@ -148,6 +150,25 @@ export const editTotal = (editor: SaleEditor, totalAmount: number, precision: nu
       requestedAmount,
       totalAmount: requestedAmount,
       activeBaseField: "totalAmount",
+      mode: "by_amount"
+    },
+    precision
+  );
+};
+
+export const editPieceAmount = (editor: SaleEditor, totalAmount: number, precision: number) => {
+  const requestedAmount = Math.max(0, totalAmount);
+  const quantity = editor.salePrice > 0 ? Math.ceil(requestedAmount / editor.salePrice) : 0;
+  const actualAmount = toMoney(quantity * Math.max(0, editor.salePrice));
+
+  return recalcSaleEditor(
+    clearDiscount(editor, precision),
+    {
+      requestedQuantity: undefined,
+      requestedAmount,
+      quantity,
+      totalAmount: actualAmount,
+      activeBaseField: "quantity",
       mode: "by_amount"
     },
     precision
