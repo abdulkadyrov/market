@@ -2,6 +2,9 @@ import type { AppSettings, BaseField, DiscountType, ProductView, SaleMode } from
 import { toMoney, toWeight } from "./utils";
 
 export interface SaleEditor {
+  requestedQuantity?: number;
+  requestedAmount: number;
+  differenceAmount: number;
   quantity: number;
   salePrice: number;
   totalAmount: number;
@@ -26,6 +29,8 @@ export const defaultSettings: AppSettings = {
 };
 
 export const createEmptySaleEditor = (product?: ProductView): SaleEditor => ({
+  requestedAmount: 0,
+  differenceAmount: 0,
   quantity: 0,
   salePrice: product?.defaultSalePrice ?? 0,
   totalAmount: 0,
@@ -60,12 +65,16 @@ export const recalcSaleEditor = (
 
   const discountAmount = next.discountAmount ? Math.min(originalTotalAmount, Math.max(0, next.discountAmount)) : 0;
   const finalTotalAmount = toMoney(Math.max(0, totalAmount - discountAmount));
+  const requestedAmount = toMoney(Math.max(0, next.requestedAmount || 0));
+  const differenceAmount = toMoney(finalTotalAmount - requestedAmount);
   const receivedAmount =
     next.receivedAmount !== undefined && next.receivedAmount > 0 ? toMoney(next.receivedAmount) : undefined;
   const changeAmount = receivedAmount !== undefined ? toMoney(Math.max(0, receivedAmount - finalTotalAmount)) : undefined;
 
   return {
     ...next,
+    requestedAmount,
+    differenceAmount,
     quantity,
     totalAmount,
     originalTotalAmount,
@@ -113,41 +122,72 @@ export const applyDiscount = (
   );
 };
 
-export const roundSaleTotal = (editor: SaleEditor, target: number, precision: number) =>
-  recalcSaleEditor(
+export const editWeight = (editor: SaleEditor, quantity: number, precision: number) => {
+  const requestedQuantity = Math.max(0, quantity);
+  const requestedAmount = toMoney(requestedQuantity * Math.max(0, editor.salePrice));
+  return recalcSaleEditor(
     clearDiscount(editor, precision),
     {
-      totalAmount: Math.max(0, target),
-      activeBaseField: "totalAmount",
-      mode: "by_amount"
-    },
-    precision
-  );
-
-export const editWeight = (editor: SaleEditor, quantity: number, precision: number) =>
-  recalcSaleEditor(
-    clearDiscount(editor, precision),
-    {
-      quantity: Math.max(0, quantity),
+      requestedQuantity,
+      requestedAmount,
+      quantity: requestedQuantity,
+      totalAmount: requestedAmount,
       activeBaseField: "quantity",
       mode: "by_weight"
     },
     precision
   );
+};
 
-export const editTotal = (editor: SaleEditor, totalAmount: number, precision: number) =>
-  recalcSaleEditor(
+export const editTotal = (editor: SaleEditor, totalAmount: number, precision: number) => {
+  const requestedAmount = Math.max(0, totalAmount);
+  return recalcSaleEditor(
     clearDiscount(editor, precision),
     {
-      totalAmount: Math.max(0, totalAmount),
+      requestedQuantity: undefined,
+      requestedAmount,
+      totalAmount: requestedAmount,
       activeBaseField: "totalAmount",
       mode: "by_amount"
     },
     precision
   );
+};
 
-export const editPrice = (editor: SaleEditor, salePrice: number, precision: number) =>
-  recalcSaleEditor(clearDiscount(editor, precision), { salePrice: Math.max(0, salePrice) }, precision);
+export const editActualTotal = (editor: SaleEditor, totalAmount: number, precision: number) =>
+  recalcSaleEditor(
+    clearDiscount(editor, precision),
+    {
+      totalAmount: Math.max(0, totalAmount),
+      activeBaseField: "totalAmount"
+    },
+    precision
+  );
+
+export const editPrice = (editor: SaleEditor, salePrice: number, precision: number) => {
+  const next = { ...clearDiscount(editor, precision), salePrice: Math.max(0, salePrice) };
+  if (next.mode === "by_weight" && next.requestedQuantity) {
+    return editWeight(next, next.requestedQuantity, precision);
+  }
+  if (next.mode === "by_amount" && next.requestedAmount) {
+    return editTotal(next, next.requestedAmount, precision);
+  }
+  return recalcSaleEditor(next, {}, precision);
+};
 
 export const setReceivedAmount = (editor: SaleEditor, receivedAmount: number, precision: number) =>
   recalcSaleEditor(editor, { receivedAmount: Math.max(0, receivedAmount) }, precision);
+
+export const calculateWriteOffQuantity = (
+  inputMode: "weight" | "packages",
+  quantity: number,
+  packageCount: number,
+  packageWeight: number,
+  precision: number
+) =>
+  toWeight(
+    inputMode === "packages"
+      ? Math.max(0, packageCount) * Math.max(0, packageWeight)
+      : Math.max(0, quantity),
+    precision
+  );

@@ -3,7 +3,7 @@ import type { AppSnapshot } from "../types";
 import { parseSnapshot } from "./snapshotValidation";
 
 export const exportSnapshot = async (): Promise<AppSnapshot> => ({
-  schemaVersion: 1,
+  schemaVersion: 2,
   exportedAt: new Date().toISOString(),
   stockGroups: await db.stockGroups.toArray(),
   products: await db.products.toArray(),

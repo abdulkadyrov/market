@@ -13,10 +13,10 @@ const emptySnapshot = () => ({
 });
 
 describe("проверка импортируемого снимка", () => {
-  it("принимает старый снимок без метаданных и добавляет версию", () => {
+  it("принимает старый снимок без метаданных и добавляет актуальную версию", () => {
     const result = parseSnapshot(emptySnapshot());
 
-    expect(result.schemaVersion).toBe(1);
+    expect(result.schemaVersion).toBe(2);
     expect(result.exportedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
   });
 

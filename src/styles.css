@@ -324,6 +324,11 @@ h2 {
   background: #fff0ee;
 }
 
+.metric-card.attention {
+  background: linear-gradient(180deg, #fff8e8 0%, #ffefc9 100%);
+  border-color: rgba(205, 132, 18, 0.35);
+}
+
 .metric-link {
   margin-top: auto;
   align-self: flex-start;
@@ -488,6 +493,12 @@ h2 {
   border-top: 1px solid rgba(111, 96, 79, 0.25);
 }
 
+.pad-live-row.danger {
+  color: #b42318;
+  padding-top: 8px;
+  border-top: 1px solid rgba(180, 35, 24, 0.25);
+}
+
 .pad-live-row strong {
   text-align: right;
 }
@@ -525,6 +536,30 @@ h2 {
 .editor-grid {
   display: grid;
   gap: 12px;
+}
+
+.spoilage-preview {
+  min-height: 76px;
+  padding: 14px 16px;
+  border: 2px solid rgba(205, 132, 18, 0.28);
+  border-radius: 18px;
+  background: #fff8e8;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 6px;
+}
+
+.spoilage-preview span {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.spoilage-preview strong {
+  font-size: 24px;
 }
 
 .field {

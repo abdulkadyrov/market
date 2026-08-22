@@ -26,13 +26,14 @@ import {
 import { db } from "./db";
 import {
   applyDiscount,
+  calculateWriteOffQuantity,
   clearDiscount,
   createEmptySaleEditor,
   defaultSettings,
+  editActualTotal,
   editPrice,
   editTotal,
   editWeight,
-  roundSaleTotal,
   setReceivedAmount,
   type SaleEditor
 } from "./logic";
@@ -80,11 +81,11 @@ type Screen =
 type KeypadField =
   | "quantity"
   | "totalAmount"
+  | "actualAmount"
   | "salePrice"
   | "discountAmount"
   | "discountPercent"
-  | "receivedAmount"
-  | "roundAmount";
+  | "receivedAmount";
 
 interface ToastState {
   id: string;
@@ -110,6 +111,9 @@ interface CartLine {
   productId: string;
   productName: string;
   stockGroupId?: string;
+  requestedQuantity?: number;
+  requestedAmount: number;
+  differenceAmount: number;
   quantity: number;
   salePrice: number;
   totalAmount: number;
@@ -144,7 +148,11 @@ interface WriteOffDraft {
   targetType: "group" | "product";
   targetId: string;
   date: string;
+  inputMode: "weight" | "packages";
   quantity: string;
+  packageCount: string;
+  packageWeight: string;
+  packageLabel: string;
   reason: string;
   comment: string;
 }
@@ -204,7 +212,11 @@ const emptyWriteOffDraft = (): WriteOffDraft => ({
   targetType: "group",
   targetId: "",
   date: nowIso(),
+  inputMode: "weight",
   quantity: "",
+  packageCount: "",
+  packageWeight: "",
+  packageLabel: "мешок",
   reason: "Порча",
   comment: ""
 });
@@ -343,7 +355,7 @@ function App() {
         date: item.date,
         title: productViewMap.get(item.productId)?.displayName ?? "Продажа",
         amount: item.finalTotalAmount,
-        subtext: `${formatWeight(item.quantity, settings.weightPrecision)} кг`
+        subtext: `${formatWeight(item.quantity, settings.weightPrecision)} кг · запрос ${formatMoney(item.requestedAmount ?? item.finalTotalAmount)} ₽ · разница ${formatSignedMoney(item.differenceAmount ?? item.finalTotalAmount - (item.requestedAmount ?? item.finalTotalAmount))}`
       })),
       ...receipts.map((item) => ({
         id: item.id,
@@ -363,7 +375,9 @@ function App() {
           ? stockGroups.find((group) => group.id === item.stockGroupId)?.name ?? "Списание"
           : productViewMap.get(item.productId ?? "")?.displayName ?? "Списание",
         amount: item.costAmount,
-        subtext: `${formatWeight(item.quantity, settings.weightPrecision)} кг`
+        subtext: item.inputMode === "packages" && item.packageCount
+          ? `${formatMoney(item.packageCount)} ${formatPackageLabel(item.packageLabel, item.packageCount)} · ${formatWeight(item.quantity, settings.weightPrecision)} кг`
+          : `${formatWeight(item.quantity, settings.weightPrecision)} кг`
       })),
       ...expenses.map((item) => ({
         id: item.id,
@@ -395,9 +409,16 @@ function App() {
     const periodExpenses = expenses.filter((item) => isInRange(item.date, analyticsRange));
     const periodWriteOffs = writeOffs.filter((item) => isInRange(item.date, analyticsRange));
     const revenue = periodSales.reduce((sum, item) => sum + item.finalTotalAmount, 0);
+    const requestedRevenue = periodSales.reduce(
+      (sum, item) => sum + (item.requestedAmount ?? item.finalTotalAmount),
+      0
+    );
+    const differenceRevenue = toMoney(revenue - requestedRevenue);
     const purchase = periodReceipts.reduce((sum, item) => sum + item.totalAmount, 0);
     const expensesTotal = periodExpenses.reduce((sum, item) => sum + item.amount, 0);
     const writeOffTotal = periodWriteOffs.reduce((sum, item) => sum + item.costAmount, 0);
+    const writeOffQuantity = periodWriteOffs.reduce((sum, item) => sum + item.quantity, 0);
+    const writeOffPackages = periodWriteOffs.reduce((sum, item) => sum + (item.packageCount ?? 0), 0);
     const cogs = periodSales.reduce((sum, item) => sum + item.costOfGoodsSold, 0);
     const stockValue =
       stockGroups.reduce((sum, item) => sum + item.currentStock * item.averageCost, 0) +
@@ -417,17 +438,46 @@ function App() {
       topProductMap.set(sale.productId, current);
     }
 
+    const topWriteOffMap = new Map<
+      string,
+      { name: string; quantity: number; packageCount: number; cost: number; incidents: number }
+    >();
+    for (const item of periodWriteOffs) {
+      const id = item.stockGroupId ? `group:${item.stockGroupId}` : `product:${item.productId ?? "unknown"}`;
+      const name = item.stockGroupId
+        ? stockGroups.find((group) => group.id === item.stockGroupId)?.name ?? "Партия"
+        : productViewMap.get(item.productId ?? "")?.displayName ?? "Товар";
+      const current = topWriteOffMap.get(id) ?? { name, quantity: 0, packageCount: 0, cost: 0, incidents: 0 };
+      current.quantity += item.quantity;
+      current.packageCount += item.packageCount ?? 0;
+      current.cost += item.costAmount;
+      current.incidents += 1;
+      topWriteOffMap.set(id, current);
+    }
+
     return {
       revenue,
+      requestedRevenue,
+      differenceRevenue,
+      adjustedSalesCount: periodSales.filter(
+        (item) => Math.abs(item.differenceAmount ?? item.finalTotalAmount - (item.requestedAmount ?? item.finalTotalAmount)) > 0.001
+      ).length,
       purchase,
       expenses: expensesTotal,
       writeOffs: writeOffTotal,
+      writeOffQuantity,
+      writeOffPackages,
+      writeOffIncidents: periodWriteOffs.length,
       cogs,
       profit: revenue - cogs - expensesTotal - writeOffTotal,
       stockValue,
       topProducts: Array.from(topProductMap.entries())
         .map(([id, item]) => ({ id, ...item }))
         .sort((a, b) => b.revenue - a.revenue)
+        .slice(0, 5),
+      topWriteOffs: Array.from(topWriteOffMap.entries())
+        .map(([id, item]) => ({ id, ...item }))
+        .sort((a, b) => b.cost - a.cost)
         .slice(0, 5)
     };
   }, [analyticsRange, expenses, productViewMap, products, receipts, sales, stockGroups, writeOffs]);
@@ -452,7 +502,12 @@ function App() {
   }, [saleCart]);
 
   const currentLineValid =
-    !!selectedProduct && saleEditor.quantity > 0 && saleEditor.salePrice > 0 && saleEditor.finalTotalAmount > 0;
+    !!selectedProduct &&
+    saleEditor.requestedAmount > 0 &&
+    saleEditor.quantity > 0 &&
+    saleEditor.salePrice > 0 &&
+    saleEditor.finalTotalAmount > 0 &&
+    saleEditor.differenceAmount >= 0;
 
   const currentLineStockLeft = selectedProduct
     ? hasUnlimitedStock(selectedProduct)
@@ -546,6 +601,9 @@ function App() {
     if (keypad.field === "totalAmount") {
       return editTotal(saleEditor, value, precision);
     }
+    if (keypad.field === "actualAmount") {
+      return editActualTotal(saleEditor, value, precision);
+    }
     if (keypad.field === "salePrice") {
       return editPrice(saleEditor, value, precision);
     }
@@ -578,6 +636,15 @@ function App() {
 
     if (keypad.field === "totalAmount") {
       setSaleEditor((current) => editTotal(current, value, precision));
+      setToolPanel(null);
+    }
+
+    if (keypad.field === "actualAmount") {
+      if (value < saleEditor.requestedAmount) {
+        showToast("Фактическая сумма не может быть меньше запроса клиента");
+        return;
+      }
+      setSaleEditor((current) => editActualTotal(current, value, precision));
       setToolPanel(null);
     }
 
@@ -662,6 +729,14 @@ function App() {
       showToast("Проверьте вес, цену и сумму");
       return;
     }
+    if (saleEditor.requestedAmount <= 0) {
+      showToast("Введите запрос клиента в кг или рублях");
+      return;
+    }
+    if (saleEditor.differenceAmount < 0) {
+      showToast("Фактическая сумма должна быть не меньше запроса клиента");
+      return;
+    }
     if (currentLineStockLeft < saleEditor.quantity) {
       showToast("Недостаточно остатка");
       return;
@@ -674,6 +749,9 @@ function App() {
         productId: selectedProduct.id,
         productName: selectedProduct.displayName,
         stockGroupId: selectedProduct.stockGroupId,
+        requestedQuantity: saleEditor.requestedQuantity,
+        requestedAmount: saleEditor.requestedAmount,
+        differenceAmount: saleEditor.differenceAmount,
         quantity: saleEditor.quantity,
         salePrice: saleEditor.salePrice,
         totalAmount: saleEditor.totalAmount,
@@ -702,6 +780,16 @@ function App() {
     }
 
     const lines = [...saleCart];
+    const hasCurrentDraft = saleEditor.requestedAmount > 0 || saleEditor.quantity > 0 || saleEditor.totalAmount > 0;
+
+    if (hasCurrentDraft && !currentLineValid) {
+      showToast(
+        saleEditor.differenceAmount < 0
+          ? "Фактическая сумма должна быть не меньше запроса клиента"
+          : "Проверьте запрос клиента, вес, цену и фактическую сумму"
+      );
+      return;
+    }
 
     if (currentLineValid && selectedProduct) {
       if (currentLineStockLeft < saleEditor.quantity) {
@@ -714,6 +802,9 @@ function App() {
         productId: selectedProduct.id,
         productName: selectedProduct.displayName,
         stockGroupId: selectedProduct.stockGroupId,
+        requestedQuantity: saleEditor.requestedQuantity,
+        requestedAmount: saleEditor.requestedAmount,
+        differenceAmount: saleEditor.differenceAmount,
         quantity: saleEditor.quantity,
         salePrice: saleEditor.salePrice,
         totalAmount: saleEditor.totalAmount,
@@ -804,6 +895,9 @@ function App() {
             productId: line.productId,
             stockGroupId: line.stockGroupId,
             date: timestamp,
+            requestedQuantity: line.requestedQuantity,
+            requestedAmount: line.requestedAmount,
+            differenceAmount: line.differenceAmount,
             quantity: line.quantity,
             salePrice: line.salePrice,
             totalAmount: line.totalAmount,
@@ -950,15 +1044,28 @@ function App() {
       showToast("Выберите товар или партию");
       return;
     }
-    const quantity = parseNumber(writeOffDraft.quantity);
+    const packageCount = parseNumber(writeOffDraft.packageCount);
+    const packageWeight = parseNumber(writeOffDraft.packageWeight);
+    const quantity = calculateWriteOffQuantity(
+      writeOffDraft.inputMode,
+      parseNumber(writeOffDraft.quantity),
+      packageCount,
+      packageWeight,
+      settings.weightPrecision
+    );
 
     if (quantity <= 0) {
-      showToast("Введите количество списания");
+      showToast(
+        writeOffDraft.inputMode === "packages"
+          ? "Введите количество упаковок и вес одной упаковки"
+          : "Введите вес порчи"
+      );
       return;
     }
 
-    await db.transaction("rw", db.writeOffs, db.stockGroups, db.products, async () => {
-      if (writeOffDraft.targetType === "group") {
+    try {
+      await db.transaction("rw", db.writeOffs, db.stockGroups, db.products, async () => {
+        if (writeOffDraft.targetType === "group") {
         const group = await db.stockGroups.get(writeOffDraft.targetId);
         if (!group || group.currentStock < quantity) {
           throw new Error("Недостаточно остатка в группе");
@@ -972,6 +1079,10 @@ function App() {
           id: writeOffDraft.id,
           stockGroupId: writeOffDraft.targetId,
           date: writeOffDraft.date,
+          inputMode: writeOffDraft.inputMode,
+          packageCount: writeOffDraft.inputMode === "packages" ? packageCount : undefined,
+          packageWeight: writeOffDraft.inputMode === "packages" ? packageWeight : undefined,
+          packageLabel: writeOffDraft.inputMode === "packages" ? writeOffDraft.packageLabel : undefined,
           quantity,
           reason: writeOffDraft.reason,
           comment: writeOffDraft.comment,
@@ -979,7 +1090,7 @@ function App() {
           createdAt: nowIso(),
           updatedAt: nowIso()
         });
-      } else {
+        } else {
         const product = await db.products.get(writeOffDraft.targetId);
         if (!product || product.currentStock < quantity) {
           throw new Error("Недостаточно остатка у товара");
@@ -993,6 +1104,10 @@ function App() {
           id: writeOffDraft.id,
           productId: writeOffDraft.targetId,
           date: writeOffDraft.date,
+          inputMode: writeOffDraft.inputMode,
+          packageCount: writeOffDraft.inputMode === "packages" ? packageCount : undefined,
+          packageWeight: writeOffDraft.inputMode === "packages" ? packageWeight : undefined,
+          packageLabel: writeOffDraft.inputMode === "packages" ? writeOffDraft.packageLabel : undefined,
           quantity,
           reason: writeOffDraft.reason,
           comment: writeOffDraft.comment,
@@ -1000,11 +1115,15 @@ function App() {
           createdAt: nowIso(),
           updatedAt: nowIso()
         });
-      }
-    });
+        }
+      });
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : "Не удалось сохранить порчу");
+      return;
+    }
 
     setWriteOffDraft(null);
-    showToast("Списание сохранено");
+    showToast("Порча сохранена и остаток уменьшен");
   };
 
   const saveExpense = async () => {
@@ -1358,10 +1477,10 @@ function App() {
                   <button
                     className={`mode-tile ${saleEditor.mode === "by_weight" ? "active" : ""}`}
                     type="button"
-                    onClick={() => openKeypad("quantity", "Введите вес", saleEditor.quantity, "кг")}
+                    onClick={() => openKeypad("quantity", "Сколько кг просит клиент", saleEditor.requestedQuantity ?? "", "кг")}
                   >
                     <span>ПО ВЕСУ</span>
-                    <strong>{saleEditor.quantity > 0 ? `${formatWeight(saleEditor.quantity, settings.weightPrecision)} кг` : "Ввести кг"}</strong>
+                    <strong>{saleEditor.requestedQuantity ? `${formatWeight(saleEditor.requestedQuantity, settings.weightPrecision)} кг` : "Ввести кг"}</strong>
                   </button>
                   <div className="mode-presets" aria-label="Быстрый выбор веса">
                     {weightQuickButtons.map((button) => (
@@ -1375,10 +1494,10 @@ function App() {
                   <button
                     className={`mode-tile ${saleEditor.mode === "by_amount" ? "active" : ""}`}
                     type="button"
-                    onClick={() => openKeypad("totalAmount", "Введите сумму", saleEditor.totalAmount, "₽")}
+                    onClick={() => openKeypad("totalAmount", "На какую сумму просит клиент", saleEditor.requestedAmount, "₽")}
                   >
                     <span>НА СУММУ</span>
-                    <strong>{saleEditor.totalAmount > 0 ? `${formatMoney(saleEditor.totalAmount)} ₽` : "Ввести ₽"}</strong>
+                    <strong>{saleEditor.requestedAmount > 0 ? `${formatMoney(saleEditor.requestedAmount)} ₽` : "Ввести ₽"}</strong>
                   </button>
                   <div className="mode-presets" aria-label="Быстрый выбор суммы">
                     {amountQuickButtons.map((button) => (
@@ -1393,29 +1512,37 @@ function App() {
               <div className="result-panel">
                 <MetricCard label="Товар" value={selectedProduct?.displayName ?? "Нет"} />
                 <MetricCard
+                  label="Запрос клиента"
+                  value={
+                    saleEditor.mode === "by_weight" && saleEditor.requestedQuantity
+                      ? `${formatWeight(saleEditor.requestedQuantity, settings.weightPrecision)} кг = ${formatMoney(saleEditor.requestedAmount)} ₽`
+                      : `${formatMoney(saleEditor.requestedAmount)} ₽`
+                  }
+                />
+                <MetricCard
+                  label="Фактически получилось"
+                  value={`${formatMoney(saleEditor.finalTotalAmount)} ₽`}
+                  buttonLabel="Ввести результат"
+                  onClick={() => openKeypad("actualAmount", "Сколько получилось", saleEditor.finalTotalAmount, "₽")}
+                  accent="primary"
+                />
+                <MetricCard
+                  label="Разница к запросу"
+                  value={formatSignedMoney(saleEditor.differenceAmount)}
+                  accent={saleEditor.differenceAmount < 0 ? "danger" : saleEditor.differenceAmount > 0 ? "attention" : undefined}
+                />
+                <MetricCard label="Вес фактически" value={`${formatWeight(saleEditor.quantity, settings.weightPrecision)} кг`} />
+                <MetricCard
                   label="Цена"
                   value={`${formatMoney(saleEditor.salePrice)} ₽/кг`}
                   onClick={() => openKeypad("salePrice", "Изменить цену", saleEditor.salePrice, "₽")}
-                />
-                <MetricCard
-                  label="Вес"
-                  value={`${formatWeight(saleEditor.quantity, settings.weightPrecision)} кг`}
-                  onClick={() => openKeypad("quantity", "Изменить вес", saleEditor.quantity, "кг")}
-                />
-                <MetricCard
-                  label="Сумма"
-                  value={`${formatMoney(saleEditor.totalAmount)} ₽`}
-                  onClick={() => openKeypad("totalAmount", "Изменить сумму", saleEditor.totalAmount, "₽")}
                 />
                 {saleEditor.discountAmount ? (
                   <>
                     <MetricCard label="Было" value={`${formatMoney(saleEditor.originalTotalAmount)} ₽`} />
                     <MetricCard label="Скидка" value={`-${formatMoney(saleEditor.discountAmount)} ₽`} accent="danger" />
-                    <MetricCard label="Итого" value={`${formatMoney(saleEditor.finalTotalAmount)} ₽`} accent="primary" />
                   </>
-                ) : (
-                  <MetricCard label="Итого" value={`${formatMoney(saleEditor.finalTotalAmount)} ₽`} accent="primary" />
-                )}
+                ) : null}
               </div>
 
               <div className="quick-actions">
@@ -1489,7 +1616,7 @@ function App() {
                   <strong>{formatMoney(checkoutTotal)} ₽</strong>
                 </div>
                 {saleCart.length === 0 ? (
-                  <EmptyState title="Чек пока пустой" text="Введите вес или сумму и нажмите «В чек». Текущая позиция также продастся сразу по кнопке «ПРОДАТЬ»." />
+                  <EmptyState title="Чек пока пустой" text="Введите запрос клиента, затем точную фактическую сумму и нажмите «В чек». Текущая позиция также продастся по кнопке завершения продажи." />
                 ) : (
                   <div className="list-stack">
                     {saleCart.map((line) => (
@@ -1497,7 +1624,7 @@ function App() {
                         key={line.id}
                         title={line.productName}
                         subtitle={`${formatWeight(line.quantity, settings.weightPrecision)} кг x ${formatMoney(line.salePrice)} ₽`}
-                        meta={line.discountAmount ? `Скидка ${formatMoney(line.discountAmount)} ₽` : "В чеке"}
+                        meta={`Запрос ${formatMoney(line.requestedAmount)} ₽ · разница ${formatSignedMoney(line.differenceAmount)}${line.discountAmount ? ` · скидка ${formatMoney(line.discountAmount)} ₽` : ""}`}
                         side={`${formatMoney(line.finalTotalAmount)} ₽`}
                         actions={
                           <button className="ghost-button danger" type="button" onClick={() => removeCartLine(line.id)}>
@@ -1764,13 +1891,16 @@ function App() {
 
             <Section>
               <div className="section-header">
-                <h2>Списания</h2>
+                <div>
+                  <div className="eyebrow">Контроль потерь</div>
+                  <h2>Порча и списания</h2>
+                </div>
                 <button className="primary-button" type="button" onClick={() => setWriteOffDraft(emptyWriteOffDraft())}>
-                  <Plus size={18} /> Списание
+                  <Plus size={18} /> Зафиксировать порчу
                 </button>
               </div>
               {writeOffDraft && (
-                <EditorCard title="Новое списание" onCancel={() => setWriteOffDraft(null)} onSave={() => void saveWriteOff()}>
+                <EditorCard title="Что испортилось" onCancel={() => setWriteOffDraft(null)} onSave={() => void saveWriteOff()}>
                   <Field label="Откуда списать">
                     <select value={writeOffDraft.targetType} onChange={(event) => setWriteOffDraft({ ...writeOffDraft, targetType: event.target.value as "group" | "product", targetId: "" })}>
                       <option value="group">Общая партия</option>
@@ -1787,13 +1917,68 @@ function App() {
                       ))}
                     </select>
                   </Field>
-                  <Field label="Количество">
-                    <input inputMode="decimal" value={writeOffDraft.quantity} onChange={(event) => setWriteOffDraft({ ...writeOffDraft, quantity: event.target.value })} />
+                  <Field label="Как считать">
+                    <select
+                      value={writeOffDraft.inputMode}
+                      onChange={(event) =>
+                        setWriteOffDraft({
+                          ...writeOffDraft,
+                          inputMode: event.target.value as "weight" | "packages"
+                        })
+                      }
+                    >
+                      <option value="weight">По точному весу</option>
+                      <option value="packages">Мешками / упаковками</option>
+                    </select>
                   </Field>
+                  {writeOffDraft.inputMode === "weight" ? (
+                    <Field label="Испорчено, кг">
+                      <input inputMode="decimal" value={writeOffDraft.quantity} onChange={(event) => setWriteOffDraft({ ...writeOffDraft, quantity: event.target.value })} />
+                    </Field>
+                  ) : (
+                    <>
+                      <Field label="Вид упаковки">
+                        <select value={writeOffDraft.packageLabel} onChange={(event) => setWriteOffDraft({ ...writeOffDraft, packageLabel: event.target.value })}>
+                          <option value="мешок">Мешок</option>
+                          <option value="ящик">Ящик</option>
+                          <option value="коробка">Коробка</option>
+                          <option value="упаковка">Упаковка</option>
+                        </select>
+                      </Field>
+                      <Field label="Количество упаковок">
+                        <input inputMode="decimal" value={writeOffDraft.packageCount} onChange={(event) => setWriteOffDraft({ ...writeOffDraft, packageCount: event.target.value })} />
+                      </Field>
+                      <Field label="Вес одной упаковки, кг">
+                        <input inputMode="decimal" value={writeOffDraft.packageWeight} onChange={(event) => setWriteOffDraft({ ...writeOffDraft, packageWeight: event.target.value })} />
+                      </Field>
+                      <div className="spoilage-preview">
+                        <span>Итого будет списано</span>
+                        <strong>
+                          {formatWeight(
+                            calculateWriteOffQuantity(
+                              "packages",
+                              0,
+                              parseNumber(writeOffDraft.packageCount),
+                              parseNumber(writeOffDraft.packageWeight),
+                              settings.weightPrecision
+                            ),
+                            settings.weightPrecision
+                          )} кг
+                        </strong>
+                      </div>
+                    </>
+                  )}
                   <Field label="Причина">
-                    <input value={writeOffDraft.reason} onChange={(event) => setWriteOffDraft({ ...writeOffDraft, reason: event.target.value })} />
+                    <select value={writeOffDraft.reason} onChange={(event) => setWriteOffDraft({ ...writeOffDraft, reason: event.target.value })}>
+                      <option value="Порча">Порча</option>
+                      <option value="Брак">Брак</option>
+                      <option value="Усушка">Усушка</option>
+                      <option value="Истек срок">Истек срок</option>
+                      <option value="Повреждение">Повреждение</option>
+                      <option value="Другое">Другое</option>
+                    </select>
                   </Field>
-                  <Field label="Комментарий">
+                  <Field label="Что произошло / детали">
                     <textarea value={writeOffDraft.comment} onChange={(event) => setWriteOffDraft({ ...writeOffDraft, comment: event.target.value })} />
                   </Field>
                 </EditorCard>
@@ -1803,7 +1988,11 @@ function App() {
                   <ListCard
                     key={item.id}
                     title={item.stockGroupId ? stockGroups.find((group) => group.id === item.stockGroupId)?.name ?? "Партия" : productViewMap.get(item.productId ?? "")?.displayName ?? "Товар"}
-                    subtitle={`${formatWeight(item.quantity, settings.weightPrecision)} кг`}
+                    subtitle={
+                      item.inputMode === "packages" && item.packageCount
+                        ? `${formatMoney(item.packageCount)} ${formatPackageLabel(item.packageLabel, item.packageCount)} × ${formatWeight(item.packageWeight ?? 0, settings.weightPrecision)} кг = ${formatWeight(item.quantity, settings.weightPrecision)} кг`
+                        : `${formatWeight(item.quantity, settings.weightPrecision)} кг`
+                    }
                     meta={`${item.reason} · ${formatDateTime(item.date)}`}
                     side={`${formatMoney(item.costAmount)} ₽`}
                   />
@@ -1937,13 +2126,50 @@ function App() {
                 </div>
               </div>
               <div className="stats-grid">
-                <StatCard icon={<Wallet size={20} />} label="Выручка" value={`${formatMoney(report.revenue)} ₽`} />
+                <StatCard icon={<Wallet size={20} />} label="Ровно по запросу" value={`${formatMoney(report.requestedRevenue)} ₽`} />
+                <StatCard icon={<TrendingUp size={20} />} label="Фактически получили" value={`${formatMoney(report.revenue)} ₽`} />
+                <StatCard
+                  icon={<Calculator size={20} />}
+                  label={`Разница · ${formatCountWithNoun(report.adjustedSalesCount, ["продажа", "продажи", "продаж"])}`}
+                  value={formatSignedMoney(report.differenceRevenue)}
+                />
                 <StatCard icon={<Receipt size={20} />} label="Закупка" value={`${formatMoney(report.purchase)} ₽`} />
                 <StatCard icon={<Boxes size={20} />} label="Себестоимость продаж" value={`${formatMoney(report.cogs)} ₽`} />
                 <StatCard icon={<ClipboardList size={20} />} label="Расходы" value={`${formatMoney(report.expenses)} ₽`} />
                 <StatCard icon={<Archive size={20} />} label="Списания" value={`${formatMoney(report.writeOffs)} ₽`} />
                 <StatCard icon={<Boxes size={20} />} label="Остатки" value={`${formatMoney(report.stockValue)} ₽`} />
                 <StatCard icon={<TrendingUp size={20} />} label="Прибыль" value={`${formatMoney(report.profit)} ₽`} />
+              </div>
+            </Section>
+
+            <Section>
+              <div className="section-header">
+                <div>
+                  <div className="eyebrow">Потери за период</div>
+                  <h2>Порча и списания</h2>
+                </div>
+                <span>{formatMoney(report.writeOffs)} ₽ себестоимости</span>
+              </div>
+              <div className="stats-grid spoilage-stats">
+                <StatCard icon={<Archive size={20} />} label="Случаев" value={String(report.writeOffIncidents)} />
+                <StatCard icon={<Boxes size={20} />} label="Испорчено" value={`${formatWeight(report.writeOffQuantity, settings.weightPrecision)} кг`} />
+                <StatCard icon={<Package size={20} />} label="Упаковок / мешков" value={formatMoney(report.writeOffPackages)} />
+                <StatCard icon={<Wallet size={20} />} label="Потери" value={`${formatMoney(report.writeOffs)} ₽`} />
+              </div>
+              <div className="list-stack">
+                {report.topWriteOffs.length === 0 ? (
+                  <EmptyState title="Порчи не было" text="Списания за выбранный период появятся здесь." />
+                ) : (
+                  report.topWriteOffs.map((item) => (
+                    <ListCard
+                      key={item.id}
+                      title={item.name}
+                      subtitle={`${formatWeight(item.quantity, settings.weightPrecision)} кг${item.packageCount > 0 ? ` · ${formatMoney(item.packageCount)} уп.` : ""}`}
+                      meta={`${formatCountWithNoun(item.incidents, ["случай", "случая", "случаев"])} за выбранный период`}
+                      side={`${formatMoney(item.cost)} ₽`}
+                    />
+                  ))
+                )}
               </div>
             </Section>
 
@@ -2331,7 +2557,7 @@ function MetricCard({
   value: string;
   buttonLabel?: string;
   onClick?: () => void;
-  accent?: "primary" | "danger";
+  accent?: "primary" | "danger" | "attention";
 }) {
   return (
     <div className={`metric-card ${accent ?? ""} ${onClick ? "clickable" : ""}`.trim()} onClick={onClick}>
@@ -2479,12 +2705,20 @@ function NumberPad({
             <strong>{formatMoney(preview.salePrice)} ₽/кг</strong>
           </div>
           <div className="pad-live-row emphasis">
-            <span>Вес</span>
+            <span>Вес фактически</span>
             <strong>{formatWeight(preview.quantity, weightPrecision)} кг</strong>
           </div>
           <div className="pad-live-row emphasis">
-            <span>Сумма</span>
-            <strong>{formatMoney(preview.totalAmount)} ₽</strong>
+            <span>Запрос клиента</span>
+            <strong>{formatMoney(preview.requestedAmount)} ₽</strong>
+          </div>
+          <div className="pad-live-row emphasis">
+            <span>Фактически</span>
+            <strong>{formatMoney(preview.finalTotalAmount)} ₽</strong>
+          </div>
+          <div className={`pad-live-row ${preview.differenceAmount < 0 ? "danger" : "total"}`}>
+            <span>Разница</span>
+            <strong>{formatSignedMoney(preview.differenceAmount)}</strong>
           </div>
           {keypad.field === "receivedAmount" ? (
             <>
@@ -2535,8 +2769,8 @@ function screenLabel(screen: Screen) {
     sale: "Касса",
     products: "Товары",
     groups: "Общие партии",
-    receipts: "Поступления и списания",
-    writeOffs: "Списания",
+    receipts: "Поступления и порча",
+    writeOffs: "Порча",
     expenses: "Расходы",
     history: "История",
     reports: "Аналитика",
@@ -2544,6 +2778,37 @@ function screenLabel(screen: Screen) {
   };
 
   return labels[screen];
+}
+
+function formatSignedMoney(value: number) {
+  const safeValue = Math.abs(value) < 0.001 ? 0 : value;
+  return `${safeValue > 0 ? "+" : safeValue < 0 ? "−" : ""}${formatMoney(Math.abs(safeValue))} ₽`;
+}
+
+function formatCountWithNoun(value: number, forms: [string, string, string]) {
+  const absolute = Math.abs(Math.trunc(value));
+  const mod100 = absolute % 100;
+  const mod10 = absolute % 10;
+  const noun =
+    mod10 === 1 && mod100 !== 11
+      ? forms[0]
+      : mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)
+        ? forms[1]
+        : forms[2];
+  return `${formatMoney(value)} ${noun}`;
+}
+
+function formatPackageLabel(label: string | undefined, count: number) {
+  const forms: Record<string, [string, string, string]> = {
+    мешок: ["мешок", "мешка", "мешков"],
+    ящик: ["ящик", "ящика", "ящиков"],
+    коробка: ["коробка", "коробки", "коробок"],
+    упаковка: ["упаковка", "упаковки", "упаковок"]
+  };
+  return formatCountWithNoun(count, forms[label ?? ""] ?? ["уп.", "уп.", "уп."]).replace(
+    `${formatMoney(count)} `,
+    ""
+  );
 }
 
 function isInRange(date: string, range: "today" | "7d" | "30d" | "all") {
@@ -2573,7 +2838,7 @@ function historyTypeLabel(type: "sale" | "receipt" | "expense" | "writeOff") {
     sale: "Продажа",
     receipt: "Поступление",
     expense: "Расход",
-    writeOff: "Списание"
+    writeOff: "Порча / списание"
   }[type];
 }
 

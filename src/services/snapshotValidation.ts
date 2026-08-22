@@ -59,6 +59,14 @@ const optionalNumber = (record: JsonRecord, key: string, path: string) => {
   return value as number | undefined;
 };
 
+const optionalSignedNumber = (record: JsonRecord, key: string, path: string) => {
+  const value = record[key];
+  if (value !== undefined && (typeof value !== "number" || !Number.isFinite(value))) {
+    fail(`${path}.${key}`, "ожидалось число");
+  }
+  return value as number | undefined;
+};
+
 const requireBoolean = (record: JsonRecord, key: string, path: string) => {
   const value = record[key];
   if (typeof value !== "boolean") {
@@ -119,6 +127,9 @@ export const parseSnapshot = (value: unknown): AppSnapshot => {
     fail("файл", "ожидался JSON-объект");
   }
   const root = value as JsonRecord;
+  if (root.schemaVersion !== undefined && (typeof root.schemaVersion !== "number" || root.schemaVersion > 2)) {
+    fail("schemaVersion", "версия файла новее поддерживаемой");
+  }
 
   const rows = Object.fromEntries(collections.map((name) => [name, requireRows(root, name)])) as Record<
     (typeof collections)[number],
@@ -184,6 +195,9 @@ export const parseSnapshot = (value: unknown): AppSnapshot => {
     }
     optionalString(row, "saleBatchId", path);
     requireString(row, "date", path, false);
+    optionalNumber(row, "requestedQuantity", path);
+    optionalNumber(row, "requestedAmount", path);
+    optionalSignedNumber(row, "differenceAmount", path);
     requireNumber(row, "quantity", path, { positive: true });
     requireNumber(row, "salePrice", path, { positive: true });
     requireNumber(row, "totalAmount", path);
@@ -213,6 +227,16 @@ export const parseSnapshot = (value: unknown): AppSnapshot => {
     const path = `writeOffs[${index}]`;
     validateCommon(row, path);
     requireString(row, "date", path, false);
+    const inputMode = optionalString(row, "inputMode", path);
+    if (inputMode && !new Set(["weight", "packages"]).has(inputMode)) {
+      fail(`${path}.inputMode`, "ожидалось weight или packages");
+    }
+    const packageCount = optionalNumber(row, "packageCount", path);
+    const packageWeight = optionalNumber(row, "packageWeight", path);
+    optionalString(row, "packageLabel", path);
+    if (inputMode === "packages" && (!packageCount || !packageWeight)) {
+      fail(path, "для упаковок нужны количество и вес одной упаковки");
+    }
     requireNumber(row, "quantity", path, { positive: true });
     requireString(row, "reason", path, false);
     requireString(row, "comment", path);
@@ -238,7 +262,7 @@ export const parseSnapshot = (value: unknown): AppSnapshot => {
   });
 
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     exportedAt: typeof root.exportedAt === "string" ? root.exportedAt : new Date().toISOString(),
     stockGroups: rows.stockGroups,
     products: rows.products,

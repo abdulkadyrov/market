@@ -54,6 +54,9 @@ export interface Sale {
   productId: string;
   stockGroupId?: string;
   date: string;
+  requestedQuantity?: number;
+  requestedAmount?: number;
+  differenceAmount?: number;
   quantity: number;
   salePrice: number;
   totalAmount: number;
@@ -87,6 +90,10 @@ export interface WriteOff {
   stockGroupId?: string;
   productId?: string;
   date: string;
+  inputMode?: "weight" | "packages";
+  packageCount?: number;
+  packageWeight?: number;
+  packageLabel?: string;
   quantity: number;
   reason: string;
   comment: string;
@@ -115,7 +122,7 @@ export interface AppSettings {
 }
 
 export interface AppSnapshot {
-  schemaVersion: 1;
+  schemaVersion: 2;
   exportedAt: string;
   stockGroups: StockGroup[];
   products: Product[];
