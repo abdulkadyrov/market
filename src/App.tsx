@@ -1,4 +1,13 @@
-import { useEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type PointerEvent as ReactPointerEvent,
+  type ReactNode,
+  type SetStateAction
+} from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import {
   Archive,
@@ -147,6 +156,24 @@ interface CartLine {
   averageCost: number;
 }
 
+type CalculatorMode = "keys" | "draw";
+
+interface OrderWorkspace {
+  id: string;
+  name: string;
+  selectedProductId: string;
+  saleEditor: SaleEditor;
+  saleCart: CartLine[];
+  receivedAmount: number;
+  calculatorExpression: string;
+  calculatorDrawing: string;
+}
+
+interface OrderState {
+  activeOrderId: string;
+  workspaces: OrderWorkspace[];
+}
+
 interface ProductDraft extends Product {}
 
 interface GroupDraft extends StockGroup {}
@@ -289,16 +316,31 @@ const unitLabel = (unit: Unit = "kg") =>
 const formatQuantity = (value: number, unit: Unit, precision: number) =>
   `${unit === "piece" ? formatMoney(value) : formatWeight(value, precision)} ${unitLabel(unit)}`;
 
+const createOrderWorkspace = (number: number): OrderWorkspace => ({
+  id: makeId("order"),
+  name: `Заказ ${number}`,
+  selectedProductId: "",
+  saleEditor: createEmptySaleEditor(),
+  saleCart: [],
+  receivedAmount: 0,
+  calculatorExpression: "",
+  calculatorDrawing: ""
+});
+
+const createInitialOrderState = (): OrderState => {
+  const firstOrder = createOrderWorkspace(1);
+  return { activeOrderId: firstOrder.id, workspaces: [firstOrder] };
+};
+
 function App() {
   const [startupError, setStartupError] = useState<string>("");
   const [screen, setScreen] = useState<Screen>("sale");
-  const [selectedProductId, setSelectedProductId] = useState("");
-  const [saleEditor, setSaleEditor] = useState<SaleEditor>(createEmptySaleEditor());
-  const [saleCart, setSaleCart] = useState<CartLine[]>([]);
+  const [orderState, setOrderState] = useState<OrderState>(createInitialOrderState);
   const [isSavingSale, setIsSavingSale] = useState(false);
-  const [receivedAmount, setReceivedAmountState] = useState<number>(0);
   const [keypad, setKeypad] = useState<KeypadState | null>(null);
   const [toolPanel, setToolPanel] = useState<"discount" | "change" | null>(null);
+  const [calculatorOpen, setCalculatorOpen] = useState(false);
+  const [calculatorMode, setCalculatorMode] = useState<CalculatorMode>("keys");
   const [toast, setToast] = useState<ToastState | null>(null);
   const [confirm, setConfirm] = useState<ConfirmState | null>(null);
   const [productDraft, setProductDraft] = useState<ProductDraft | null>(null);
@@ -317,6 +359,63 @@ function App() {
   const [newAmountPreset, setNewAmountPreset] = useState("");
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const saleCheckoutRef = useRef<HTMLDivElement | null>(null);
+
+  const activeOrder = orderState.workspaces.find((order) => order.id === orderState.activeOrderId) ?? orderState.workspaces[0];
+  const selectedProductId = activeOrder?.selectedProductId ?? "";
+  const saleEditor = activeOrder?.saleEditor ?? createEmptySaleEditor();
+  const saleCart = activeOrder?.saleCart ?? [];
+  const receivedAmount = activeOrder?.receivedAmount ?? 0;
+
+  const updateActiveOrder = (updater: (order: OrderWorkspace) => OrderWorkspace) => {
+    setOrderState((current) => ({
+      ...current,
+      workspaces: current.workspaces.map((order) =>
+        order.id === current.activeOrderId ? updater(order) : order
+      )
+    }));
+  };
+
+  const setSelectedProductId = (next: SetStateAction<string>) => {
+    updateActiveOrder((order) => ({
+      ...order,
+      selectedProductId: typeof next === "function" ? next(order.selectedProductId) : next
+    }));
+  };
+
+  const setSaleEditor = (next: SetStateAction<SaleEditor>) => {
+    updateActiveOrder((order) => ({
+      ...order,
+      saleEditor: typeof next === "function" ? next(order.saleEditor) : next
+    }));
+  };
+
+  const setSaleCart = (next: SetStateAction<CartLine[]>) => {
+    updateActiveOrder((order) => ({
+      ...order,
+      saleCart: typeof next === "function" ? next(order.saleCart) : next
+    }));
+  };
+
+  const setReceivedAmountState = (next: SetStateAction<number>) => {
+    updateActiveOrder((order) => ({
+      ...order,
+      receivedAmount: typeof next === "function" ? next(order.receivedAmount) : next
+    }));
+  };
+
+  const setCalculatorExpression = (next: SetStateAction<string>) => {
+    updateActiveOrder((order) => ({
+      ...order,
+      calculatorExpression: typeof next === "function" ? next(order.calculatorExpression) : next
+    }));
+  };
+
+  const setCalculatorDrawing = (next: SetStateAction<string>) => {
+    updateActiveOrder((order) => ({
+      ...order,
+      calculatorDrawing: typeof next === "function" ? next(order.calculatorDrawing) : next
+    }));
+  };
 
   const bazaarLocations = useLiveQuery(() => db.bazaarLocations.orderBy("marketName").toArray(), [], []) ?? [];
   const storeProfiles = useLiveQuery(() => db.storeProfiles.orderBy("name").toArray(), [], []) ?? [];
@@ -374,12 +473,10 @@ function App() {
   }, [activeProfileId, settings, storeProfiles.length]);
 
   useEffect(() => {
-    setSelectedProductId("");
-    setSaleEditor(createEmptySaleEditor());
-    setSaleCart([]);
-    setReceivedAmountState(0);
+    setOrderState(createInitialOrderState());
     setKeypad(null);
     setToolPanel(null);
+    setCalculatorOpen(false);
     setModePickerOpen(false);
     setSelectedCategory("Все");
     setProductDraft(null);
@@ -705,6 +802,83 @@ function App() {
 
   const showToast = (text: string) => setToast({ id: makeId("toast"), text });
 
+  const getOrderTotal = (order: OrderWorkspace) => {
+    const cartTotal = order.saleCart.reduce((sum, line) => sum + line.finalTotalAmount, 0);
+    const draftTotal =
+      order.saleEditor.requestedAmount > 0 &&
+      order.saleEditor.quantity > 0 &&
+      order.saleEditor.finalTotalAmount > 0 &&
+      order.saleEditor.differenceAmount >= 0
+        ? order.saleEditor.finalTotalAmount
+        : 0;
+    return toMoney(cartTotal + draftTotal);
+  };
+
+  const closeTransientSalePanels = () => {
+    setKeypad(null);
+    setToolPanel(null);
+    setModePickerOpen(false);
+    setCalculatorOpen(false);
+  };
+
+  const switchOrder = (orderId: string) => {
+    closeTransientSalePanels();
+    setOrderState((current) => ({ ...current, activeOrderId: orderId }));
+  };
+
+  const addOrder = () => {
+    if (orderState.workspaces.length >= 5) {
+      showToast("Можно открыть не больше пяти заказов");
+      return;
+    }
+
+    closeTransientSalePanels();
+    setOrderState((current) => {
+      const usedNumbers = current.workspaces.map((order) => Number(order.name.replace(/\D/g, "")) || 0);
+      const nextOrder = createOrderWorkspace(Math.max(0, ...usedNumbers) + 1);
+      return {
+        activeOrderId: nextOrder.id,
+        workspaces: [...current.workspaces, nextOrder]
+      };
+    });
+  };
+
+  const closeOrder = (orderId: string) => {
+    closeTransientSalePanels();
+    setOrderState((current) => {
+      const closingIndex = current.workspaces.findIndex((order) => order.id === orderId);
+      const remaining = current.workspaces.filter((order) => order.id !== orderId);
+      if (remaining.length === 0) {
+        return createInitialOrderState();
+      }
+      const fallback = remaining[Math.min(Math.max(0, closingIndex), remaining.length - 1)];
+      return {
+        activeOrderId: current.activeOrderId === orderId ? fallback.id : current.activeOrderId,
+        workspaces: remaining
+      };
+    });
+  };
+
+  const requestCloseOrder = (order: OrderWorkspace) => {
+    const hasData =
+      order.saleCart.length > 0 ||
+      order.saleEditor.requestedAmount > 0 ||
+      order.saleEditor.quantity > 0 ||
+      Boolean(order.calculatorExpression) ||
+      Boolean(order.calculatorDrawing);
+
+    if (!hasData) {
+      closeOrder(order.id);
+      return;
+    }
+
+    setConfirm({
+      title: `Закрыть ${order.name.toLowerCase()}?`,
+      text: "Товары, расчёт и заметка этого заказа будут удалены.",
+      action: () => closeOrder(order.id)
+    });
+  };
+
   function hasUnlimitedStock(product?: ProductView | Product | null) {
     return Boolean(product?.isUnlimitedStock && !product?.stockGroupId);
   }
@@ -752,6 +926,8 @@ function App() {
     resetSale(product);
     setSaleCart([]);
     setReceivedAmountState(0);
+    setCalculatorExpression("");
+    setCalculatorDrawing("");
   };
 
   const chooseProduct = (productId: string) => {
@@ -880,6 +1056,37 @@ function App() {
 
   const clearKeypad = () => {
     setKeypad((current) => (current ? { ...current, value: "" } : current));
+  };
+
+  const calculatorResult = evaluateExpression(activeOrder?.calculatorExpression ?? "");
+
+  const appendCalculatorKey = (key: string) => {
+    setCalculatorExpression((current) => {
+      const operators = ["+", "-", "*", "/"];
+      const lastChar = current.slice(-1);
+      if (key === "." && /(^|[+\-*/(])[^+\-*/()]*\./.test(current)) {
+        return current;
+      }
+      if (operators.includes(key)) {
+        if (!current && key !== "-") return current;
+        if (operators.includes(lastChar)) return `${current.slice(0, -1)}${key}`;
+      }
+      return `${current}${key}`.slice(0, 32);
+    });
+  };
+
+  const applyCalculatorResult = () => {
+    if (!selectedProduct) {
+      showToast("Сначала выберите товар");
+      return;
+    }
+    if (!Number.isFinite(calculatorResult) || calculatorResult <= 0) {
+      showToast("Введите расчёт больше нуля");
+      return;
+    }
+    setSaleEditor((current) => editRequestedAmount(current, calculatorResult));
+    setCalculatorOpen(false);
+    showToast(`В заказ добавлена сумма ${formatMoney(calculatorResult)} ₽`);
   };
 
   const quickApply = (button: QuickButtonSetting) => {
@@ -1703,7 +1910,48 @@ function App() {
 
       <main className="content">
         {screen === "sale" && (
-          <div className="sale-workspace">
+          <div className="sale-screen">
+            <div className="order-switcher" aria-label="Открытые заказы">
+              <div className="order-tabs">
+                {orderState.workspaces.map((order) => {
+                  const total = getOrderTotal(order);
+                  const isActive = order.id === orderState.activeOrderId;
+                  return (
+                    <div key={order.id} className={`order-tab ${isActive ? "active" : ""}`}>
+                      <button className="order-tab-main" type="button" onClick={() => switchOrder(order.id)}>
+                        <strong>{order.name}</strong>
+                        <span>{total > 0 ? `${formatMoney(total)} ₽` : "пусто"}</span>
+                      </button>
+                      {orderState.workspaces.length > 1 ? (
+                        <button
+                          className="order-tab-close"
+                          type="button"
+                          aria-label={`Закрыть ${order.name}`}
+                          onClick={() => requestCloseOrder(order)}
+                        >
+                          <X size={14} />
+                        </button>
+                      ) : null}
+                    </div>
+                  );
+                })}
+                <button className="order-add-button" type="button" onClick={addOrder} disabled={orderState.workspaces.length >= 5}>
+                  <Plus size={17} /> Новый
+                </button>
+              </div>
+              <button
+                className="order-calculator-button"
+                type="button"
+                onClick={() => {
+                  closeTransientSalePanels();
+                  setCalculatorOpen(true);
+                }}
+              >
+                <Calculator size={18} /> Калькулятор
+              </button>
+            </div>
+
+            <div className="sale-workspace">
             <Section className="ribbon-section sale-catalog">
               <div className="section-header">
                 <div>
@@ -1993,6 +2241,31 @@ function App() {
                 </button>
               </div>
             </div>
+            </div>
+
+            <OrderCalculator
+              open={calculatorOpen}
+              orderName={activeOrder?.name ?? "Заказ"}
+              mode={calculatorMode}
+              expression={activeOrder?.calculatorExpression ?? ""}
+              result={calculatorResult}
+              drawing={activeOrder?.calculatorDrawing ?? ""}
+              price={saleEditor.salePrice}
+              amount={saleEditor.requestedAmount}
+              quantity={saleEditor.requestedQuantity ?? saleEditor.quantity}
+              unit={selectedUnit}
+              weightPrecision={settings.weightPrecision}
+              onModeChange={setCalculatorMode}
+              onAppend={appendCalculatorKey}
+              onBackspace={() => setCalculatorExpression((current) => current.slice(0, -1))}
+              onClear={() => {
+                setCalculatorExpression("");
+                setCalculatorDrawing("");
+              }}
+              onDrawingChange={setCalculatorDrawing}
+              onApply={applyCalculatorResult}
+              onClose={() => setCalculatorOpen(false)}
+            />
           </div>
         )}
 
@@ -3174,6 +3447,192 @@ function EmptyState({ title, text }: { title: string; text: string }) {
     <div className="empty-state">
       <h3>{title}</h3>
       <p>{text}</p>
+    </div>
+  );
+}
+
+function OrderCalculator({
+  open,
+  orderName,
+  mode,
+  expression,
+  result,
+  drawing,
+  price,
+  amount,
+  quantity,
+  unit,
+  weightPrecision,
+  onModeChange,
+  onAppend,
+  onBackspace,
+  onClear,
+  onDrawingChange,
+  onApply,
+  onClose
+}: {
+  open: boolean;
+  orderName: string;
+  mode: CalculatorMode;
+  expression: string;
+  result: number;
+  drawing: string;
+  price: number;
+  amount: number;
+  quantity: number;
+  unit: Unit;
+  weightPrecision: number;
+  onModeChange: (mode: CalculatorMode) => void;
+  onAppend: (key: string) => void;
+  onBackspace: () => void;
+  onClear: () => void;
+  onDrawingChange: (value: string) => void;
+  onApply: () => void;
+  onClose: () => void;
+}) {
+  if (!open) return null;
+
+  const keys = ["7", "8", "9", "/", "4", "5", "6", "*", "1", "2", "3", "-", ".", "0", "+"];
+  const visibleExpression = expression.replaceAll("*", "×").replaceAll("/", "÷");
+
+  return (
+    <div className="floating-pad-backdrop calculator-backdrop" onClick={onClose}>
+      <section className="order-calculator" onClick={(event) => event.stopPropagation()}>
+        <div className="calculator-header">
+          <div>
+            <span>Калькулятор</span>
+            <h3>{orderName}</h3>
+          </div>
+          <button className="compact-pad-close" type="button" aria-label="Закрыть" onClick={onClose}>
+            <X size={18} />
+          </button>
+        </div>
+
+        <div className="calculator-segments" role="tablist" aria-label="Режим калькулятора">
+          <button className={mode === "keys" ? "active" : ""} type="button" onClick={() => onModeChange("keys")}>Клавиши</button>
+          <button className={mode === "draw" ? "active" : ""} type="button" onClick={() => onModeChange("draw")}>Рисовать</button>
+        </div>
+
+        <div className="calculator-context" aria-label="Данные активного заказа">
+          <span>Цена <strong>{formatMoney(price)} ₽</strong></span>
+          <span>Сумма <strong>{formatMoney(amount)} ₽</strong></span>
+          <span>{unit === "piece" ? "Штуки" : "Вес"} <strong>{unit === "piece" ? formatMoney(quantity) : formatWeight(quantity, weightPrecision)} {unitLabel(unit)}</strong></span>
+        </div>
+
+        {mode === "keys" ? (
+          <div className="calculator-key-mode">
+            <div className="calculator-display">
+              <span>{visibleExpression || "0"}</span>
+              <strong>{Number.isFinite(result) ? `${formatMoney(result)} ₽` : "—"}</strong>
+            </div>
+            <div className="calculator-grid">
+              {keys.map((key) => (
+                <button key={key} className={/[+\-*/]/.test(key) ? "operator" : ""} type="button" onClick={() => onAppend(key)}>
+                  {key === "*" ? "×" : key === "/" ? "÷" : key}
+                </button>
+              ))}
+              <button className="utility" type="button" aria-label="Удалить цифру" onClick={onBackspace}>←</button>
+            </div>
+          </div>
+        ) : (
+          <OrderSketchPad value={drawing} onChange={onDrawingChange} />
+        )}
+
+        <div className="calculator-actions">
+          <button className="calculator-clear" type="button" onClick={onClear}>Очистить</button>
+          {mode === "keys" ? (
+            <button className="calculator-apply" type="button" onClick={onApply}>В сумму</button>
+          ) : (
+            <button className="calculator-apply" type="button" onClick={onClose}>Сохранить</button>
+          )}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function OrderSketchPad({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const drawingRef = useRef(false);
+  const lastPointRef = useRef<{ x: number; y: number } | null>(null);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return undefined;
+
+    const render = () => {
+      const rect = canvas.getBoundingClientRect();
+      const ratio = Math.max(1, window.devicePixelRatio || 1);
+      canvas.width = Math.max(1, Math.floor(rect.width * ratio));
+      canvas.height = Math.max(1, Math.floor(rect.height * ratio));
+      const context = canvas.getContext("2d");
+      if (!context) return;
+      context.fillStyle = "#ffffff";
+      context.fillRect(0, 0, canvas.width, canvas.height);
+      if (value) {
+        const image = new Image();
+        image.onload = () => context.drawImage(image, 0, 0, canvas.width, canvas.height);
+        image.src = value;
+      }
+    };
+
+    render();
+    const observer = new ResizeObserver(render);
+    observer.observe(canvas);
+    return () => observer.disconnect();
+  }, [value]);
+
+  const pointFromEvent = (event: ReactPointerEvent<HTMLCanvasElement>) => {
+    const canvas = event.currentTarget;
+    const rect = canvas.getBoundingClientRect();
+    return {
+      x: (event.clientX - rect.left) * (canvas.width / rect.width),
+      y: (event.clientY - rect.top) * (canvas.height / rect.height)
+    };
+  };
+
+  const startDrawing = (event: ReactPointerEvent<HTMLCanvasElement>) => {
+    drawingRef.current = true;
+    lastPointRef.current = pointFromEvent(event);
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+
+  const draw = (event: ReactPointerEvent<HTMLCanvasElement>) => {
+    if (!drawingRef.current || !lastPointRef.current) return;
+    const canvas = event.currentTarget;
+    const context = canvas.getContext("2d");
+    if (!context) return;
+    const nextPoint = pointFromEvent(event);
+    context.beginPath();
+    context.moveTo(lastPointRef.current.x, lastPointRef.current.y);
+    context.lineTo(nextPoint.x, nextPoint.y);
+    context.strokeStyle = "#17171f";
+    context.lineWidth = Math.max(4, canvas.width / 180);
+    context.lineCap = "round";
+    context.lineJoin = "round";
+    context.stroke();
+    lastPointRef.current = nextPoint;
+  };
+
+  const finishDrawing = (event: ReactPointerEvent<HTMLCanvasElement>) => {
+    if (!drawingRef.current) return;
+    drawingRef.current = false;
+    lastPointRef.current = null;
+    onChange(event.currentTarget.toDataURL("image/png"));
+  };
+
+  return (
+    <div className="order-sketch-wrap">
+      <canvas
+        ref={canvasRef}
+        className="order-sketch"
+        aria-label="Поле для рукописной заметки"
+        onPointerDown={startDrawing}
+        onPointerMove={draw}
+        onPointerUp={finishDrawing}
+        onPointerCancel={finishDrawing}
+      />
+      {!value ? <span>Пишите или рисуйте пальцем</span> : null}
     </div>
   );
 }
