@@ -728,6 +728,43 @@ function App() {
     };
   }, [analyticsRange, expenses, productMap, productViewMap, products, receipts, sales, stockGroupMap, stockGroups, writeOffs]);
 
+  const inventoryMovementRows = useMemo(() => {
+    const periodSales = sales.filter((item) => isInRange(item.date, analyticsRange));
+    const periodReceipts = receipts.filter((item) => isInRange(item.date, analyticsRange));
+    const periodWriteOffs = writeOffs.filter((item) => isInRange(item.date, analyticsRange));
+    const rows: Array<{ id: string; name: string; unit: Unit; opening: number; sold: number; remaining: number }> = [];
+
+    for (const group of stockGroups) {
+      const sold = periodSales.filter((item) => item.stockGroupId === group.id).reduce((sum, item) => sum + item.quantity, 0);
+      const received = periodReceipts.filter((item) => item.stockGroupId === group.id).reduce((sum, item) => sum + item.quantity, 0);
+      const spoiled = periodWriteOffs.filter((item) => item.stockGroupId === group.id).reduce((sum, item) => sum + item.quantity, 0);
+      rows.push({
+        id: `group_${group.id}`,
+        name: group.name,
+        unit: group.unit,
+        opening: Math.max(0, group.currentStock + sold + spoiled - received),
+        sold,
+        remaining: group.currentStock
+      });
+    }
+
+    for (const product of products.filter((item) => !item.stockGroupId && !item.isArchived && !item.isUnlimitedStock)) {
+      const sold = periodSales.filter((item) => item.productId === product.id).reduce((sum, item) => sum + item.quantity, 0);
+      const received = periodReceipts.filter((item) => item.productId === product.id).reduce((sum, item) => sum + item.quantity, 0);
+      const spoiled = periodWriteOffs.filter((item) => item.productId === product.id).reduce((sum, item) => sum + item.quantity, 0);
+      rows.push({
+        id: `product_${product.id}`,
+        name: productViewMap.get(product.id)?.displayName ?? product.name,
+        unit: product.unit,
+        opening: Math.max(0, product.currentStock + sold + spoiled - received),
+        sold,
+        remaining: product.currentStock
+      });
+    }
+
+    return rows.sort((a, b) => b.sold - a.sold || a.name.localeCompare(b.name, "ru"));
+  }, [analyticsRange, productViewMap, products, receipts, sales, stockGroups, writeOffs]);
+
   const shareAnalytics = async () => {
     if (!activeProfile) {
       showToast("Сначала выберите профиль");
@@ -768,24 +805,43 @@ function App() {
 
   const reservedStockByProduct = useMemo(() => {
     const map = new Map<string, number>();
-    for (const line of saleCart) {
-      if (line.id === editingLineId) continue;
-      map.set(line.productId, (map.get(line.productId) ?? 0) + line.quantity);
+    for (const order of orderState.workspaces) {
+      for (const line of order.saleCart) {
+        if (line.id === order.editingLineId) continue;
+        map.set(line.productId, (map.get(line.productId) ?? 0) + line.quantity);
+      }
+      if (order.id !== orderState.activeOrderId && order.saleEditor.quantity > 0) {
+        const draftProduct = productViewMap.get(order.selectedProductId);
+        if (draftProduct && !draftProduct.stockGroupId) {
+          map.set(
+            order.selectedProductId,
+            (map.get(order.selectedProductId) ?? 0) + order.saleEditor.quantity
+          );
+        }
+      }
     }
     return map;
-  }, [editingLineId, saleCart]);
+  }, [orderState, productViewMap]);
 
   const reservedStockByGroup = useMemo(() => {
     const map = new Map<string, number>();
-    for (const line of saleCart) {
-      if (line.id === editingLineId) continue;
-      if (!line.stockGroupId) {
-        continue;
+    for (const order of orderState.workspaces) {
+      for (const line of order.saleCart) {
+        if (line.id === order.editingLineId || !line.stockGroupId) continue;
+        map.set(line.stockGroupId, (map.get(line.stockGroupId) ?? 0) + line.quantity);
       }
-      map.set(line.stockGroupId, (map.get(line.stockGroupId) ?? 0) + line.quantity);
+      if (order.id !== orderState.activeOrderId && order.saleEditor.quantity > 0) {
+        const draftProduct = productViewMap.get(order.selectedProductId);
+        if (draftProduct?.stockGroupId) {
+          map.set(
+            draftProduct.stockGroupId,
+            (map.get(draftProduct.stockGroupId) ?? 0) + order.saleEditor.quantity
+          );
+        }
+      }
     }
     return map;
-  }, [editingLineId, saleCart]);
+  }, [orderState, productViewMap]);
 
   const currentLineValid =
     !!selectedProduct &&
@@ -796,14 +852,21 @@ function App() {
     saleEditor.finalTotalAmount > 0 &&
     saleEditor.differenceAmount >= 0;
 
-  const currentLineStockLeft = selectedProduct
-    ? hasUnlimitedStock(selectedProduct)
+  const getSellableStock = (product: ProductView) =>
+    hasUnlimitedStock(product)
       ? Number.POSITIVE_INFINITY
-      : selectedProduct.availableStock -
-        (selectedProduct.stockGroupId
-          ? reservedStockByGroup.get(selectedProduct.stockGroupId) ?? 0
-          : reservedStockByProduct.get(selectedProduct.id) ?? 0)
+      : Math.max(
+          0,
+          product.availableStock -
+            (product.stockGroupId
+              ? reservedStockByGroup.get(product.stockGroupId) ?? 0
+              : reservedStockByProduct.get(product.id) ?? 0)
+        );
+
+  const currentLineStockLeft = selectedProduct
+    ? getSellableStock(selectedProduct)
     : 0;
+  const selectedProductSoldOut = Boolean(selectedProduct && !hasUnlimitedStock(selectedProduct) && currentLineStockLeft <= 0);
 
   const currentOriginalSalePrice = selectedProduct?.defaultSalePrice ?? saleEditor.salePrice;
   const currentPriceDiscountAmount = calculatePriceDiscount(
@@ -913,9 +976,11 @@ function App() {
   const getProductStockSubtitle = (product: ProductView) =>
     hasUnlimitedStock(product)
       ? "Остаток: без ограничения"
+      : getSellableStock(product) <= 0
+        ? "Закончился"
       : product.sharedStockName
-        ? `Общий остаток: ${formatQuantity(product.availableStock, product.unit, settings.weightPrecision)}`
-        : `Остаток: ${formatQuantity(product.availableStock, product.unit, settings.weightPrecision)}`;
+        ? `Доступно: ${formatQuantity(getSellableStock(product), product.unit, settings.weightPrecision)}`
+        : `Доступно: ${formatQuantity(getSellableStock(product), product.unit, settings.weightPrecision)}`;
 
   const getProductStockMeta = (product: ProductView) =>
     hasUnlimitedStock(product)
@@ -964,15 +1029,33 @@ function App() {
       return;
     }
 
+    if (getSellableStock(product) <= 0) {
+      showToast("Товар закончился — добавление недоступно");
+      return;
+    }
+
     const hasDraft = saleEditor.requestedAmount > 0 || saleEditor.quantity > 0 || saleEditor.totalAmount > 0;
+    const sharesCurrentStock = Boolean(
+      selectedProduct &&
+      (selectedProduct.id === product.id ||
+        (selectedProduct.stockGroupId && selectedProduct.stockGroupId === product.stockGroupId))
+    );
+    const targetStockAfterCommit =
+      hasDraft && sharesCurrentStock
+        ? getSellableStock(product) - saleEditor.quantity
+        : getSellableStock(product);
     if (hasDraft && !commitCurrentItemToCart(false)) {
       return;
     }
 
     setSelectedProductId(productId);
     resetSale(product);
-    setModePickerOpen(true);
-    if (hasDraft) showToast("Позиция добавлена — вводите следующую");
+    setModePickerOpen(targetStockAfterCommit > 0);
+    if (targetStockAfterCommit <= 0) {
+      showToast("Позиция добавлена, товар закончился");
+    } else if (hasDraft) {
+      showToast("Позиция добавлена — вводите следующую");
+    }
   };
 
   const chooseSaleMode = (mode: SaleMode) => {
@@ -2088,8 +2171,9 @@ function App() {
                 {filteredProductViews.map((product) => (
                   <button
                     key={product.id}
-                    className={`product-chip ${product.id === selectedProductId ? "active" : ""}`}
+                    className={`product-chip ${product.id === selectedProductId ? "active" : ""} ${getSellableStock(product) <= 0 ? "sold-out" : ""}`}
                     type="button"
+                    disabled={getSellableStock(product) <= 0}
                     onClick={() => chooseProduct(product.id)}
                   >
                     <span className="product-chip-visual" aria-hidden="true">{productEmoji(product.displayName)}</span>
@@ -2144,6 +2228,7 @@ function App() {
                 <span>{editingLineId ? "Редактирование позиции" : "Текущая позиция"}</span>
                 {editingLineId ? <button type="button" onClick={() => resetSale(selectedProduct)}>Отменить</button> : null}
               </div>
+              {selectedProductSoldOut ? <div className="sold-out-notice">Товар закончился — выберите другую позицию</div> : null}
               <div className="sale-head">
                 <div>
                   <div className="eyebrow">Выбран товар</div>
@@ -2172,6 +2257,7 @@ function App() {
                   <button
                     className={`mode-tile ${saleEditor.mode === "by_weight" ? "active" : ""}`}
                     type="button"
+                    disabled={selectedProductSoldOut}
                     onClick={() => openKeypad("quantity", isPieceSelected ? "Введите количество" : "Введите вес", saleEditor.requestedQuantity ?? "", unitLabel(selectedUnit))}
                   >
                     <span>{isPieceSelected ? "ПО КОЛИЧЕСТВУ" : "ПО ВЕСУ"}</span>
@@ -2179,7 +2265,7 @@ function App() {
                   </button>
                   <div className="mode-presets" aria-label={isPieceSelected ? "Быстрый выбор количества" : "Быстрый выбор веса"}>
                     {weightQuickButtons.map((button) => (
-                      <button key={button.id} className="preset-chip" type="button" onClick={() => quickApply(button)}>
+                      <button key={button.id} className="preset-chip" type="button" disabled={selectedProductSoldOut} onClick={() => quickApply(button)}>
                         {isPieceSelected ? `${formatMoney(Math.max(1, Math.floor(button.value)))} шт` : button.label}
                       </button>
                     ))}
@@ -2189,6 +2275,7 @@ function App() {
                   <button
                     className={`mode-tile ${saleEditor.mode === "by_amount" ? "active" : ""}`}
                     type="button"
+                    disabled={selectedProductSoldOut}
                     onClick={() => openKeypad("totalAmount", "Введите сумму", saleEditor.requestedAmount, "₽")}
                   >
                     <span>НА СУММУ</span>
@@ -2196,7 +2283,7 @@ function App() {
                   </button>
                   <div className="mode-presets" aria-label="Быстрый выбор суммы">
                     {amountQuickButtons.map((button) => (
-                      <button key={button.id} className="preset-chip" type="button" onClick={() => quickApply(button)}>
+                      <button key={button.id} className="preset-chip" type="button" disabled={selectedProductSoldOut} onClick={() => quickApply(button)}>
                         {button.label}
                       </button>
                     ))}
@@ -2253,7 +2340,7 @@ function App() {
               <div className="quick-actions">
                 <ActionButton onClick={() => setToolPanel((current) => (current === "discount" ? null : "discount"))}>Скидка</ActionButton>
                 <ActionButton onClick={() => setToolPanel((current) => (current === "change" ? null : "change"))}>Оплата и сдача</ActionButton>
-                <button className="primary-button checkout-add-button" type="button" onClick={addCurrentItemToCart}>
+                <button className="primary-button checkout-add-button" type="button" onClick={addCurrentItemToCart} disabled={selectedProductSoldOut}>
                   {editingLineId ? "Сохранить" : "Добавить"}
                 </button>
                 <button
@@ -2904,6 +2991,25 @@ function App() {
                 <StatCard icon={<Archive size={20} />} label="Списания" value={`${formatMoney(report.writeOffs)} ₽`} />
                 <StatCard icon={<Boxes size={20} />} label="Остатки" value={`${formatMoney(report.stockValue)} ₽`} />
                 <StatCard icon={<TrendingUp size={20} />} label="Прибыль" value={`${formatMoney(report.profit)} ₽`} />
+              </div>
+            </Section>
+
+            <Section>
+              <div className="section-header">
+                <div>
+                  <div className="eyebrow">Движение за период</div>
+                  <h2>Остатки и продажи</h2>
+                </div>
+              </div>
+              <div className="inventory-movement-list">
+                {inventoryMovementRows.map((item) => (
+                  <div key={item.id} className="inventory-movement-row">
+                    <strong>{item.name}</strong>
+                    <span>Было <b>{formatQuantity(item.opening, item.unit, settings.weightPrecision)}</b></span>
+                    <span>Продали <b>{formatQuantity(item.sold, item.unit, settings.weightPrecision)}</b></span>
+                    <span>Осталось <b>{formatQuantity(item.remaining, item.unit, settings.weightPrecision)}</b></span>
+                  </div>
+                ))}
               </div>
             </Section>
 
