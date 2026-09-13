@@ -166,7 +166,8 @@ textarea {
   cursor: pointer;
 }
 
-.daily-expense-chip {
+.daily-expense-chip,
+.cash-wallet-chip {
   min-height: 58px;
   padding: 8px 14px;
   border: 1px solid var(--line);
@@ -180,13 +181,25 @@ textarea {
   gap: 2px;
 }
 
-.daily-expense-chip span {
+.daily-expense-chip span,
+.cash-wallet-chip span,
+.cash-wallet-chip small {
   color: var(--muted);
   font-size: 11px;
 }
 
-.daily-expense-chip strong {
+.daily-expense-chip strong,
+.cash-wallet-chip strong {
   font-size: 17px;
+}
+
+.cash-wallet-chip {
+  border-color: color-mix(in srgb, var(--success) 22%, var(--line));
+  background: #effaf3;
+}
+
+.cash-wallet-chip small {
+  font-size: 9px;
 }
 
 .content,
@@ -1035,6 +1048,11 @@ h2 {
   }
 
   .daily-expense-chip {
+    order: 4;
+    flex: 1;
+  }
+
+  .cash-wallet-chip {
     order: 4;
     flex: 1;
   }

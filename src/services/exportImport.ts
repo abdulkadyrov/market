@@ -3,7 +3,7 @@ import type { AppSnapshot } from "../types";
 import { parseSnapshot } from "./snapshotValidation";
 
 export const exportSnapshot = async (): Promise<AppSnapshot> => ({
-  schemaVersion: 4,
+  schemaVersion: 5,
   exportedAt: new Date().toISOString(),
   bazaarLocations: await db.bazaarLocations.toArray(),
   storeProfiles: await db.storeProfiles.toArray(),
@@ -12,6 +12,7 @@ export const exportSnapshot = async (): Promise<AppSnapshot> => ({
   receipts: await db.receipts.toArray(),
   sales: await db.sales.toArray(),
   expenses: await db.expenses.toArray(),
+  cashFloats: await db.cashFloats.toArray(),
   writeOffs: await db.writeOffs.toArray(),
   quickButtonSettings: await db.quickButtonSettings.toArray(),
   appSettings: await db.appSettings.toArray()
@@ -29,6 +30,7 @@ export const importSnapshot = async (input: unknown) => {
     await db.receipts.bulkPut(snapshot.receipts);
     await db.sales.bulkPut(snapshot.sales);
     await db.expenses.bulkPut(snapshot.expenses);
+    await db.cashFloats.bulkPut(snapshot.cashFloats);
     await db.writeOffs.bulkPut(snapshot.writeOffs);
     await db.quickButtonSettings.bulkPut(snapshot.quickButtonSettings);
     await db.appSettings.bulkPut(snapshot.appSettings);

@@ -110,7 +110,8 @@ type KeypadField =
   | "salePrice"
   | "discountAmount"
   | "discountPercent"
-  | "receivedAmount";
+  | "receivedAmount"
+  | "cashFloat";
 
 interface ToastState {
   id: string;
@@ -431,6 +432,7 @@ function App() {
   const allReceipts = useLiveQuery(() => db.receipts.orderBy("date").reverse().toArray(), [], []) ?? [];
   const allSales = useLiveQuery(() => db.sales.orderBy("date").reverse().toArray(), [], []) ?? [];
   const allExpenses = useLiveQuery(() => db.expenses.orderBy("date").reverse().toArray(), [], []) ?? [];
+  const allCashFloats = useLiveQuery(() => db.cashFloats.orderBy("date").reverse().toArray(), [], []) ?? [];
   const allWriteOffs = useLiveQuery(() => db.writeOffs.orderBy("date").reverse().toArray(), [], []) ?? [];
   const quickButtons = useLiveQuery(() => db.quickButtonSettings.orderBy("order").toArray(), [], []) ?? [];
   const appSettings = useLiveQuery(() => db.appSettings.get("main"), [], defaultSettings);
@@ -448,6 +450,15 @@ function App() {
   const writeOffs = useMemo(() => allWriteOffs.filter((item) => item.profileId === activeProfileId), [activeProfileId, allWriteOffs]);
   const todayExpenses = useMemo(() => expenses.filter((item) => isToday(item.date)), [expenses]);
   const todayExpenseTotal = useMemo(() => todayExpenses.reduce((sum, item) => sum + item.amount, 0), [todayExpenses]);
+  const todaySalesTotal = useMemo(
+    () => sales.filter((item) => isToday(item.date)).reduce((sum, item) => sum + item.finalTotalAmount, 0),
+    [sales]
+  );
+  const todayDateKey = new Date().toLocaleDateString("sv-SE");
+  const todayCashFloat = allCashFloats.find(
+    (item) => item.profileId === activeProfileId && item.date === todayDateKey
+  );
+  const walletExpectedAmount = toMoney((todayCashFloat?.openingAmount ?? 0) + todaySalesTotal - todayExpenseTotal);
   const todayExpenseByCategory = useMemo(
     () =>
       todayExpenses.reduce<Record<string, number>>((totals, item) => {
@@ -733,6 +744,7 @@ function App() {
       `Фактически: ${formatMoney(report.revenue)} ₽`,
       `Разница: ${formatSignedMoney(report.differenceRevenue)}`,
       `Скидочных продаж: ${report.discountedSalesCount}`,
+      `Кошелек смены: ${formatMoney(walletExpectedAmount)} ₽ (старт ${formatMoney(todayCashFloat?.openingAmount ?? 0)} ₽)`,
       `Расходы: ${formatMoney(report.expenses)} ₽`,
       `Порча: ${formatMoney(report.writeOffs)} ₽`,
       `Прибыль: ${formatMoney(report.profit)} ₽`
@@ -987,6 +999,21 @@ function App() {
     });
   };
 
+  const saveCashFloat = async (openingAmount: number) => {
+    const timestamp = nowIso();
+    const id = `cash_float_${activeProfileId}_${todayDateKey}`;
+    const existing = await db.cashFloats.get(id);
+    await db.cashFloats.put({
+      id,
+      profileId: activeProfileId,
+      date: todayDateKey,
+      openingAmount: toMoney(Math.max(0, openingAmount)),
+      createdAt: existing?.createdAt ?? timestamp,
+      updatedAt: timestamp
+    });
+    showToast("Деньги для сдачи сохранены");
+  };
+
   const submitKeypad = () => {
     if (!keypad) {
       return;
@@ -1042,6 +1069,10 @@ function App() {
     if (keypad.field === "receivedAmount") {
       setReceivedAmountState(value);
       setToolPanel("change");
+    }
+
+    if (keypad.field === "cashFloat") {
+      void saveCashFloat(value);
     }
 
     setKeypad(null);
@@ -1957,6 +1988,16 @@ function App() {
             ))}
           </select>
         </label>
+        <button
+          className="cash-wallet-chip"
+          type="button"
+          title="Деньги для сдачи на сегодня"
+          onClick={() => openKeypad("cashFloat", "Деньги для сдачи", todayCashFloat?.openingAmount ?? "", "₽")}
+        >
+          <span>Кошелек смены</span>
+          <strong>{formatMoney(walletExpectedAmount)} ₽</strong>
+          <small>старт {formatMoney(todayCashFloat?.openingAmount ?? 0)} ₽</small>
+        </button>
         <button className="daily-expense-chip" type="button" onClick={() => setScreen("expenses")}>
           <span>Расходы сегодня</span>
           <strong>{formatMoney(todayExpenseTotal)} ₽</strong>
@@ -2856,6 +2897,7 @@ function App() {
                   value={formatSignedMoney(report.differenceRevenue)}
                 />
                 <StatCard icon={<Wallet size={20} />} label="Скидочные продажи" value={String(report.discountedSalesCount)} />
+                <StatCard icon={<Wallet size={20} />} label="Кошелек сегодня" value={`${formatMoney(walletExpectedAmount)} ₽`} />
                 <StatCard icon={<Receipt size={20} />} label="Закупка" value={`${formatMoney(report.purchase)} ₽`} />
                 <StatCard icon={<Boxes size={20} />} label="Себестоимость продаж" value={`${formatMoney(report.cogs)} ₽`} />
                 <StatCard icon={<ClipboardList size={20} />} label="Расходы" value={`${formatMoney(report.expenses)} ₽`} />
@@ -3749,7 +3791,7 @@ function NumberPad({
             <X size={18} />
           </button>
         </div>
-        <div className="compact-pad-params" aria-label="Параметры продажи">
+        {keypad.field !== "cashFloat" ? <div className="compact-pad-params" aria-label="Параметры продажи">
           <button
             className={keypad.field === "salePrice" ? "active" : ""}
             type="button"
@@ -3774,7 +3816,7 @@ function NumberPad({
             <span>{unit === "piece" ? "Штуки" : "Вес"}</span>
             <strong>{unit === "piece" ? formatMoney(quantity) : formatWeight(quantity, weightPrecision)} {unitLabel(unit)}</strong>
           </button>
-        </div>
+        </div> : null}
         <div className="pad-display" aria-live="polite">
           <strong>{keypad.value || 0}</strong>
           <span>{keypad.suffix}</span>

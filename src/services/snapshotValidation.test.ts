@@ -7,6 +7,7 @@ const emptySnapshot = () => ({
   receipts: [] as Array<Record<string, unknown>>,
   sales: [] as Array<Record<string, unknown>>,
   expenses: [] as Array<Record<string, unknown>>,
+  cashFloats: [] as Array<Record<string, unknown>>,
   writeOffs: [] as Array<Record<string, unknown>>,
   quickButtonSettings: [] as Array<Record<string, unknown>>,
   appSettings: [] as Array<Record<string, unknown>>
@@ -16,7 +17,7 @@ describe("проверка импортируемого снимка", () => {
   it("принимает старый снимок без метаданных и добавляет актуальную версию", () => {
     const result = parseSnapshot(emptySnapshot());
 
-    expect(result.schemaVersion).toBe(4);
+    expect(result.schemaVersion).toBe(5);
     expect(result.bazaarLocations).toHaveLength(1);
     expect(result.storeProfiles).toHaveLength(1);
     expect(result.appSettings).toHaveLength(0);

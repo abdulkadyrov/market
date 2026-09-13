@@ -16,6 +16,7 @@ const collections = [
   "receipts",
   "sales",
   "expenses",
+  "cashFloats",
   "writeOffs",
   "quickButtonSettings",
   "appSettings"
@@ -135,7 +136,7 @@ export const parseSnapshot = (value: unknown): AppSnapshot => {
     fail("файл", "ожидался JSON-объект");
   }
   const inputRoot = value as JsonRecord;
-  if (inputRoot.schemaVersion !== undefined && (typeof inputRoot.schemaVersion !== "number" || inputRoot.schemaVersion > 4)) {
+  if (inputRoot.schemaVersion !== undefined && (typeof inputRoot.schemaVersion !== "number" || inputRoot.schemaVersion > 5)) {
     fail("schemaVersion", "версия файла новее поддерживаемой");
   }
   const root = normalizeLegacySnapshot(inputRoot);
@@ -286,6 +287,14 @@ export const parseSnapshot = (value: unknown): AppSnapshot => {
     requireString(row, "comment", path);
   });
 
+  rows.cashFloats.forEach((row, index) => {
+    const path = `cashFloats[${index}]`;
+    validateCommon(row, path);
+    requireProfile(row, path);
+    requireString(row, "date", path, false);
+    requireNumber(row, "openingAmount", path);
+  });
+
   rows.writeOffs.forEach((row, index) => {
     const path = `writeOffs[${index}]`;
     validateCommon(row, path);
@@ -331,7 +340,7 @@ export const parseSnapshot = (value: unknown): AppSnapshot => {
   });
 
   return {
-    schemaVersion: 4,
+    schemaVersion: 5,
     exportedAt: typeof root.exportedAt === "string" ? root.exportedAt : new Date().toISOString(),
     bazaarLocations: rows.bazaarLocations,
     storeProfiles: rows.storeProfiles,
@@ -340,6 +349,7 @@ export const parseSnapshot = (value: unknown): AppSnapshot => {
     receipts: rows.receipts,
     sales: rows.sales,
     expenses: rows.expenses,
+    cashFloats: rows.cashFloats,
     writeOffs: rows.writeOffs,
     quickButtonSettings: rows.quickButtonSettings,
     appSettings: rows.appSettings
@@ -348,13 +358,21 @@ export const parseSnapshot = (value: unknown): AppSnapshot => {
 
 function normalizeLegacySnapshot(root: JsonRecord): JsonRecord {
   const version = typeof root.schemaVersion === "number" ? root.schemaVersion : 1;
-  if (version >= 4) {
+  if (version >= 5) {
     return root;
+  }
+
+  if (version >= 4) {
+    return {
+      ...root,
+      cashFloats: Array.isArray(root.cashFloats) ? root.cashFloats : [],
+      schemaVersion: 5
+    };
   }
 
   const timestamp = typeof root.exportedAt === "string" ? root.exportedAt : new Date().toISOString();
   const tenantCollections = ["stockGroups", "products", "receipts", "sales", "expenses", "writeOffs"];
-  const migrated: JsonRecord = { ...root };
+  const migrated: JsonRecord = { ...root, cashFloats: Array.isArray(root.cashFloats) ? root.cashFloats : [] };
 
   if (version < 3) {
     migrated.storeProfiles = [createDefaultProfile(timestamp)];
@@ -402,7 +420,7 @@ function normalizeLegacySnapshot(root: JsonRecord): JsonRecord {
     return { ...row, bazaarLocationId: locationId };
   });
   migrated.bazaarLocations = locations.length > 0 ? locations : createDefaultBazaarLocations(timestamp).slice(0, 1);
-  migrated.schemaVersion = 4;
+  migrated.schemaVersion = 5;
   return migrated;
 }
 

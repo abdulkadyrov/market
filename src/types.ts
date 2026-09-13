@@ -115,6 +115,15 @@ export interface Expense {
   updatedAt: string;
 }
 
+export interface CashFloat {
+  id: string;
+  profileId: string;
+  date: string;
+  openingAmount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface WriteOff {
   id: string;
   profileId: string;
@@ -154,7 +163,7 @@ export interface AppSettings {
 }
 
 export interface AppSnapshot {
-  schemaVersion: 4;
+  schemaVersion: 5;
   exportedAt: string;
   bazaarLocations: BazaarLocation[];
   storeProfiles: StoreProfile[];
@@ -163,6 +172,7 @@ export interface AppSnapshot {
   receipts: Receipt[];
   sales: Sale[];
   expenses: Expense[];
+  cashFloats: CashFloat[];
   writeOffs: WriteOff[];
   quickButtonSettings: QuickButtonSetting[];
   appSettings: AppSettings[];

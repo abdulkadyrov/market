@@ -2,6 +2,7 @@ import Dexie, { type Table } from "dexie";
 import type {
   AppSettings,
   BazaarLocation,
+  CashFloat,
   Expense,
   Product,
   QuickButtonSetting,
@@ -27,6 +28,7 @@ export class MarketDatabase extends Dexie {
   receipts!: Table<Receipt, string>;
   sales!: Table<Sale, string>;
   expenses!: Table<Expense, string>;
+  cashFloats!: Table<CashFloat, string>;
   writeOffs!: Table<WriteOff, string>;
   quickButtonSettings!: Table<QuickButtonSetting, string>;
   appSettings!: Table<AppSettings, string>;
@@ -212,6 +214,20 @@ export class MarketDatabase extends Dexie {
           }
         }
       });
+
+    this.version(7).stores({
+      bazaarLocations: "id, city, marketName, isArchived, updatedAt",
+      storeProfiles: "id, bazaarLocationId, name, city, isArchived, updatedAt",
+      stockGroups: "id, profileId, name, updatedAt",
+      products: "id, profileId, name, variant, stockGroupId, isArchived, updatedAt",
+      receipts: "id, profileId, stockGroupId, productId, date, updatedAt",
+      sales: "id, profileId, productId, stockGroupId, date, isDiscounted, updatedAt",
+      expenses: "id, profileId, date, category, updatedAt",
+      cashFloats: "id, profileId, date, updatedAt",
+      writeOffs: "id, profileId, stockGroupId, productId, date, updatedAt",
+      quickButtonSettings: "id, type, order",
+      appSettings: "id, activeProfileId, updatedAt"
+    });
   }
 }
 
