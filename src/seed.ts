@@ -14,32 +14,20 @@ import type {
 import { nowIso } from "./utils";
 import {
   createDefaultBazaarLocations,
-  createDefaultProfile,
+  createDefaultProfiles,
   DEFAULT_PROFILE_ID,
-  SECOND_BAZAAR_LOCATION_ID
+  FARMER_PROFILE_ID,
+  SECOND_PROFILE_ID
 } from "./profiles";
 
 const initializedKey = "market-db-initialized";
 const demoRequestedKey = "market-db-demo-requested";
 
 const timestamp = nowIso();
-const secondProfileId = "profile_gazelle_2";
+const secondProfileId = SECOND_PROFILE_ID;
 const bazaarLocations: BazaarLocation[] = createDefaultBazaarLocations(timestamp);
 
-const storeProfiles: StoreProfile[] = [
-  createDefaultProfile(timestamp),
-  {
-    id: secondProfileId,
-    bazaarLocationId: SECOND_BAZAAR_LOCATION_ID,
-    name: "Газель №2",
-    city: "Астрахань",
-    marketName: "Большие Исады",
-    pointName: "Ряд 4 · точка 7",
-    isArchived: false,
-    createdAt: timestamp,
-    updatedAt: timestamp
-  }
-];
+const storeProfiles: StoreProfile[] = createDefaultProfiles(timestamp);
 
 const stockGroupId = "group_bolgarka";
 const productIds = {
@@ -50,7 +38,9 @@ const productIds = {
   cucumber: "product_cucumber",
   watermelonPiece: "product_watermelon_piece",
   cucumberSecond: "product_cucumber_gazelle_2",
-  tomatoSecond: "product_tomato_gazelle_2"
+  tomatoSecond: "product_tomato_gazelle_2",
+  cucumberFarmer: "product_cucumber_farmer",
+  tomatoFarmer: "product_tomato_farmer"
 };
 
 const stockGroups: StockGroup[] = [
@@ -195,6 +185,38 @@ const products: Product[] = [
     averageCost: 50,
     defaultSalePrice: 85,
     notes: "Отдельная цена второй точки",
+    isArchived: false,
+    createdAt: timestamp,
+    updatedAt: timestamp
+  },
+  {
+    id: productIds.cucumberFarmer,
+    profileId: FARMER_PROFILE_ID,
+    name: "Огурец",
+    variant: "фермерский",
+    category: "Овощи",
+    unit: "kg",
+    currentStock: 55,
+    isUnlimitedStock: false,
+    averageCost: 38,
+    defaultSalePrice: 70,
+    notes: "Фермерская партия",
+    isArchived: false,
+    createdAt: timestamp,
+    updatedAt: timestamp
+  },
+  {
+    id: productIds.tomatoFarmer,
+    profileId: FARMER_PROFILE_ID,
+    name: "Помидор",
+    variant: "фермерский",
+    category: "Овощи",
+    unit: "kg",
+    currentStock: 48,
+    isUnlimitedStock: false,
+    averageCost: 52,
+    defaultSalePrice: 90,
+    notes: "Фермерская партия",
     isArchived: false,
     createdAt: timestamp,
     updatedAt: timestamp

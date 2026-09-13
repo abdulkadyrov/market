@@ -167,6 +167,7 @@ interface OrderWorkspace {
   receivedAmount: number;
   calculatorExpression: string;
   calculatorDrawing: string;
+  editingLineId?: string;
 }
 
 interface OrderState {
@@ -302,7 +303,7 @@ const emptyProfileDraft = (location?: BazaarLocation): ProfileDraft => ({
 
 const emptyBazaarLocationDraft = (): BazaarLocationDraft => ({
   id: makeId("bazaar"),
-  city: "Махачкала",
+  city: "Урус-Мартан",
   marketName: "",
   pointName: "",
   isArchived: false,
@@ -324,7 +325,8 @@ const createOrderWorkspace = (number: number): OrderWorkspace => ({
   saleCart: [],
   receivedAmount: 0,
   calculatorExpression: "",
-  calculatorDrawing: ""
+  calculatorDrawing: "",
+  editingLineId: undefined
 });
 
 const createInitialOrderState = (): OrderState => {
@@ -365,6 +367,7 @@ function App() {
   const saleEditor = activeOrder?.saleEditor ?? createEmptySaleEditor();
   const saleCart = activeOrder?.saleCart ?? [];
   const receivedAmount = activeOrder?.receivedAmount ?? 0;
+  const editingLineId = activeOrder?.editingLineId;
 
   const updateActiveOrder = (updater: (order: OrderWorkspace) => OrderWorkspace) => {
     setOrderState((current) => ({
@@ -415,6 +418,10 @@ function App() {
       ...order,
       calculatorDrawing: typeof next === "function" ? next(order.calculatorDrawing) : next
     }));
+  };
+
+  const setEditingLineId = (editingLineId?: string) => {
+    updateActiveOrder((order) => ({ ...order, editingLineId }));
   };
 
   const bazaarLocations = useLiveQuery(() => db.bazaarLocations.orderBy("marketName").toArray(), [], []) ?? [];
@@ -750,21 +757,23 @@ function App() {
   const reservedStockByProduct = useMemo(() => {
     const map = new Map<string, number>();
     for (const line of saleCart) {
+      if (line.id === editingLineId) continue;
       map.set(line.productId, (map.get(line.productId) ?? 0) + line.quantity);
     }
     return map;
-  }, [saleCart]);
+  }, [editingLineId, saleCart]);
 
   const reservedStockByGroup = useMemo(() => {
     const map = new Map<string, number>();
     for (const line of saleCart) {
+      if (line.id === editingLineId) continue;
       if (!line.stockGroupId) {
         continue;
       }
       map.set(line.stockGroupId, (map.get(line.stockGroupId) ?? 0) + line.quantity);
     }
     return map;
-  }, [saleCart]);
+  }, [editingLineId, saleCart]);
 
   const currentLineValid =
     !!selectedProduct &&
@@ -795,15 +804,21 @@ function App() {
 
   const checkoutCurrentIncluded = currentLineValid ? saleEditor.finalTotalAmount : 0;
   const checkoutTotal = useMemo(
-    () => toMoney(saleCart.reduce((sum, item) => sum + item.finalTotalAmount, checkoutCurrentIncluded)),
-    [checkoutCurrentIncluded, saleCart]
+    () => toMoney(saleCart.reduce(
+      (sum, item) => sum + (item.id === editingLineId ? 0 : item.finalTotalAmount),
+      checkoutCurrentIncluded
+    )),
+    [checkoutCurrentIncluded, editingLineId, saleCart]
   );
   const checkoutChange = toMoney(Math.max(0, (receivedAmount || 0) - checkoutTotal));
 
   const showToast = (text: string) => setToast({ id: makeId("toast"), text });
 
   const getOrderTotal = (order: OrderWorkspace) => {
-    const cartTotal = order.saleCart.reduce((sum, line) => sum + line.finalTotalAmount, 0);
+    const cartTotal = order.saleCart.reduce(
+      (sum, line) => sum + (line.id === order.editingLineId ? 0 : line.finalTotalAmount),
+      0
+    );
     const draftTotal =
       order.saleEditor.requestedAmount > 0 &&
       order.saleEditor.quantity > 0 &&
@@ -918,6 +933,7 @@ function App() {
 
   const resetSale = (product = selectedProduct) => {
     setSaleEditor(createEmptySaleEditor(product));
+    setEditingLineId(undefined);
     setKeypad(null);
     setToolPanel(null);
   };
@@ -935,9 +951,16 @@ function App() {
     if (!product) {
       return;
     }
+
+    const hasDraft = saleEditor.requestedAmount > 0 || saleEditor.quantity > 0 || saleEditor.totalAmount > 0;
+    if (hasDraft && !commitCurrentItemToCart(false)) {
+      return;
+    }
+
     setSelectedProductId(productId);
     resetSale(product);
     setModePickerOpen(true);
+    if (hasDraft) showToast("Позиция добавлена — вводите следующую");
   };
 
   const chooseSaleMode = (mode: SaleMode) => {
@@ -1104,32 +1127,30 @@ function App() {
     }
   };
 
-  const addCurrentItemToCart = () => {
+  const commitCurrentItemToCart = (showNotice = true) => {
     if (!selectedProduct) {
       showToast("Выберите товар");
-      return;
+      return false;
     }
     if (saleEditor.quantity <= 0 || saleEditor.salePrice <= 0 || saleEditor.finalTotalAmount <= 0) {
       showToast(isPieceSelected ? "Проверьте количество, цену и сумму" : "Проверьте вес, цену и сумму");
-      return;
+      return false;
     }
     if (saleEditor.requestedAmount <= 0) {
       showToast(isPieceSelected ? "Введите запрос клиента в штуках или рублях" : "Введите запрос клиента в кг или рублях");
-      return;
+      return false;
     }
     if (saleEditor.differenceAmount < 0) {
       showToast("Фактическая сумма должна быть не меньше запроса клиента");
-      return;
+      return false;
     }
     if (currentLineStockLeft < saleEditor.quantity) {
       showToast("Недостаточно остатка");
-      return;
+      return false;
     }
 
-    setSaleCart((current) => [
-      ...current,
-      {
-        id: makeId("line"),
+    const nextLine: CartLine = {
+        id: editingLineId ?? makeId("line"),
         productId: selectedProduct.id,
         productName: selectedProduct.displayName,
         unit: selectedProduct.unit,
@@ -1151,15 +1172,52 @@ function App() {
         mode: saleEditor.mode,
         activeBaseField: saleEditor.activeBaseField,
         averageCost: selectedProduct.averageCost
-      }
-    ]);
+      };
 
+    setSaleCart((current) =>
+      editingLineId
+        ? current.map((line) => (line.id === editingLineId ? nextLine : line))
+        : [...current, nextLine]
+    );
+    setEditingLineId(undefined);
+
+    if (showNotice) showToast(editingLineId ? "Позиция обновлена" : "Позиция добавлена в заказ");
+    return true;
+  };
+
+  const addCurrentItemToCart = () => {
+    if (!commitCurrentItemToCart()) return;
     resetSale(selectedProduct);
-    showToast("Позиция добавлена в чек");
   };
 
   const removeCartLine = (lineId: string) => {
     setSaleCart((current) => current.filter((item) => item.id !== lineId));
+    if (editingLineId === lineId) resetSale(selectedProduct);
+  };
+
+  const editCartLine = (line: CartLine) => {
+    const product = productViewMap.get(line.productId);
+    if (!product) return;
+    closeTransientSalePanels();
+    setSelectedProductId(line.productId);
+    setSaleEditor({
+      requestedQuantity: line.requestedQuantity,
+      requestedAmount: line.requestedAmount,
+      differenceAmount: line.differenceAmount,
+      quantity: line.quantity,
+      salePrice: line.salePrice,
+      totalAmount: line.totalAmount,
+      originalTotalAmount: line.originalTotalAmount,
+      discountType: line.discountType,
+      discountValue: line.discountValue,
+      discountAmount: line.discountAmount,
+      finalTotalAmount: line.finalTotalAmount,
+      mode: line.mode,
+      activeBaseField: line.activeBaseField
+    });
+    setEditingLineId(line.id);
+    saleCheckoutRef.current?.scrollTo({ top: 0, behavior: "smooth" });
+    showToast("Позиция открыта для редактирования");
   };
 
   const persistSale = async () => {
@@ -1167,7 +1225,7 @@ function App() {
       return;
     }
 
-    const lines = [...saleCart];
+    const lines = saleCart.filter((line) => line.id !== editingLineId);
     const hasCurrentDraft = saleEditor.requestedAmount > 0 || saleEditor.quantity > 0 || saleEditor.totalAmount > 0;
 
     if (hasCurrentDraft && !currentLineValid) {
@@ -2010,6 +2068,41 @@ function App() {
 
             <div ref={saleCheckoutRef} className="sale-checkout-column">
               <Section className="sale-focus">
+              <div className="order-list-panel">
+                <div className="order-list-head">
+                  <div>
+                    <span>{activeOrder?.name ?? "Заказ"}</span>
+                    <strong>{saleCart.length > 0 ? formatCountWithNoun(saleCart.length, ["позиция", "позиции", "позиций"]) : "Новый заказ"}</strong>
+                  </div>
+                  <b>{formatMoney(checkoutTotal)} ₽</b>
+                </div>
+                {saleCart.length > 0 ? (
+                  <div className="order-line-list">
+                    {saleCart.map((line, index) => (
+                      <div key={line.id} className={`order-line-row ${line.id === editingLineId ? "editing" : ""}`}>
+                        <button className="order-line-edit" type="button" onClick={() => editCartLine(line)}>
+                          <span className="order-line-number">{index + 1}</span>
+                          <span className="order-line-copy">
+                            <strong>{line.productName}</strong>
+                            <small>{formatQuantity(line.quantity, line.unit, settings.weightPrecision)} × {formatMoney(line.salePrice)} ₽</small>
+                          </span>
+                          <b>{formatMoney(line.finalTotalAmount)} ₽</b>
+                        </button>
+                        <button className="order-line-delete" type="button" aria-label={`Удалить ${line.productName}`} onClick={() => removeCartLine(line.id)}>
+                          <Trash2 size={15} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p>Выберите товар слева и укажите вес или сумму</p>
+                )}
+              </div>
+
+              <div className="editor-caption">
+                <span>{editingLineId ? "Редактирование позиции" : "Текущая позиция"}</span>
+                {editingLineId ? <button type="button" onClick={() => resetSale(selectedProduct)}>Отменить</button> : null}
+              </div>
               <div className="sale-head">
                 <div>
                   <div className="eyebrow">Выбран товар</div>
@@ -2120,7 +2213,7 @@ function App() {
                 <ActionButton onClick={() => setToolPanel((current) => (current === "discount" ? null : "discount"))}>Скидка</ActionButton>
                 <ActionButton onClick={() => setToolPanel((current) => (current === "change" ? null : "change"))}>Оплата и сдача</ActionButton>
                 <button className="primary-button checkout-add-button" type="button" onClick={addCurrentItemToCart}>
-                  В чек
+                  {editingLineId ? "Сохранить" : "Добавить"}
                 </button>
                 <button
                   className="danger-button reset-sale-button"
@@ -2180,29 +2273,6 @@ function App() {
                   </div>
                 </Panel>
               )}
-
-              {saleCart.length > 0 && <Panel title="Чек">
-                <div className="section-header">
-                  <h3>Позиции</h3>
-                  <strong>{formatMoney(checkoutTotal)} ₽</strong>
-                </div>
-                  <div className="list-stack">
-                    {saleCart.map((line) => (
-                      <ListCard
-                        key={line.id}
-                        title={line.productName}
-                        subtitle={`${formatQuantity(line.quantity, line.unit, settings.weightPrecision)} × ${formatMoney(line.salePrice)} ₽`}
-                        meta={`Запрос ${formatMoney(line.requestedAmount)} ₽ · разница ${formatSignedMoney(line.differenceAmount)}${line.priceDiscountAmount ? ` · скидочная цена ${formatMoney(line.priceDiscountAmount)} ₽` : ""}${line.discountAmount ? ` · скидка ${formatMoney(line.discountAmount)} ₽` : ""}`}
-                        side={`${formatMoney(line.finalTotalAmount)} ₽`}
-                        actions={
-                          <button className="ghost-button danger" type="button" onClick={() => removeCartLine(line.id)}>
-                            <Trash2 size={16} /> Убрать
-                          </button>
-                        }
-                      />
-                    ))}
-                  </div>
-              </Panel>}
 
               <NumberPad
                 keypad={keypad}
@@ -2892,7 +2962,7 @@ function App() {
                     </datalist>
                   </Field>
                   <Field label="Название базара">
-                    <input value={bazaarLocationDraft.marketName} placeholder="Например, Восточный базар" onChange={(event) => setBazaarLocationDraft({ ...bazaarLocationDraft, marketName: event.target.value })} />
+                    <input value={bazaarLocationDraft.marketName} placeholder="Например, Центральный базар" onChange={(event) => setBazaarLocationDraft({ ...bazaarLocationDraft, marketName: event.target.value })} />
                   </Field>
                   <Field label="Точка / ряд">
                     <input value={bazaarLocationDraft.pointName} placeholder="Например, Ряд 4 · точка 7" onChange={(event) => setBazaarLocationDraft({ ...bazaarLocationDraft, pointName: event.target.value })} />
@@ -2928,7 +2998,7 @@ function App() {
               {profileDraft && (
                 <EditorCard title="Профиль точки" onCancel={() => setProfileDraft(null)} onSave={() => void saveProfile()}>
                   <Field label="Название профиля / газели">
-                    <input value={profileDraft.name} placeholder="Например, Газель №3" onChange={(event) => setProfileDraft({ ...profileDraft, name: event.target.value })} />
+                    <input value={profileDraft.name} placeholder="Например, Синий газель" onChange={(event) => setProfileDraft({ ...profileDraft, name: event.target.value })} />
                   </Field>
                   <Field label="Сохраненный базар / место">
                     <select
